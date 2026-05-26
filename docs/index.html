@@ -80,14 +80,15 @@
     }
     .btn-outline:hover { border-color: var(--purple); background: rgba(124,58,237,0.08); }
     .btn-primary {
-      padding: 8px 18px; border-radius: 8px;
-      background: var(--grad);
-      color: #fff; font-size: 13px; font-weight: 700;
+      padding: 8px 18px; border-radius: 980px;
+      background: #fff;
+      color: #000; font-size: 13px; font-weight: 600;
       cursor: pointer; text-decoration: none; border: none;
       display: flex; align-items: center; gap: 7px;
-      transition: opacity 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      transition: background 0.2s;
     }
-    .btn-primary:hover { opacity: 0.88; }
+    .btn-primary:hover { background: #ececec; }
 
     /* ── HERO ── */
     .hero {
@@ -131,10 +132,10 @@
     .hero-pill span { color: var(--purple); }
 
     h1 {
-      font-size: clamp(42px, 5vw, 64px);
-      font-weight: 900;
-      line-height: 1.08;
-      letter-spacing: -0.02em;
+      font-size: clamp(38px, 5vw, 60px);
+      font-weight: 700;
+      line-height: 1.1;
+      letter-spacing: -0.025em;
       margin-bottom: 20px;
     }
     h1 .grad-text {
@@ -164,10 +165,16 @@
     .cta-big:hover { opacity: 0.9; transform: translateY(-1px); }
     .cta-big small { font-size: 11px; font-weight: 400; opacity: 0.75; margin-top: 1px; }
     .cta-download {
-      background: var(--grad); color: #fff;
-      align-items: flex-start; gap: 2px;
+      background: #fff; color: #000;
+      align-items: center; gap: 0;
+      flex-direction: row;
+      padding: 12px 22px;
+      border-radius: 980px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.15);
     }
+    .cta-download:hover { background: #f0f0f0; transform: none; opacity: 1; }
     .cta-download .cta-label { display: flex; align-items: center; gap: 8px; }
+    .cta-download small { display: none; }
     .cta-license {
       background: var(--surface);
       border: 1px solid var(--border);
@@ -546,7 +553,7 @@
       Pro License
     </a>
     <a href="https://github.com/yf1511/tracktag/releases/latest" class="btn-primary" target="_blank">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 18c-4.418 0-8-3.582-8-8s3.582-8 8-8 8 3.582 8 8-3.582 8-8 8zm-1-13v5.586l-2.293-2.293-1.414 1.414L12 17.414l4.707-4.707-1.414-1.414L13 13.586V7h-2z"/></svg>
+      <svg width="13" height="13" viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-57.8-155.5-127.4C46 376.7 0 248.7 0 122.6c0-74.3 26.5-142.4 75.4-191.2C123.4-17.4 193.4-40 257.7-40c64.9 0 124.5 24.8 168.4 24.8 41.5 0 108.3-26.3 180.4-26.3zm-194.3-86.4c31.5-37.8 54.3-90.7 54.3-143.5 0-7.3-.6-14.6-1.9-20.6-51.5 1.9-112.7 34.3-149.3 75.3-28.5 32.4-55.1 85.2-55.1 139.3 0 8 1.3 16 1.9 18.6 3.2.6 8.4 1.3 13.6 1.3 46.2 0 102.9-30.9 136.5-70.4z"/></svg>
       Download for macOS
     </a>
   </div>
@@ -571,10 +578,9 @@
       <div class="hero-ctas">
         <a href="https://github.com/yf1511/tracktag/releases/latest" class="cta-big cta-download" target="_blank">
           <div class="cta-label">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            <svg width="17" height="17" viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76 0-103.7 40.8-165.9 40.8s-105-57.8-155.5-127.4C46 376.7 0 248.7 0 122.6c0-74.3 26.5-142.4 75.4-191.2C123.4-17.4 193.4-40 257.7-40c64.9 0 124.5 24.8 168.4 24.8 41.5 0 108.3-26.3 180.4-26.3zm-194.3-86.4c31.5-37.8 54.3-90.7 54.3-143.5 0-7.3-.6-14.6-1.9-20.6-51.5 1.9-112.7 34.3-149.3 75.3-28.5 32.4-55.1 85.2-55.1 139.3 0 8 1.3 16 1.9 18.6 3.2.6 8.4 1.3 13.6 1.3 46.2 0 102.9-30.9 136.5-70.4z"/></svg>
             Download for macOS
           </div>
-          <small>macOS 12.0 or later</small>
         </a>
         <a href="#pricing" class="cta-big cta-license">
           <div class="cta-label">
