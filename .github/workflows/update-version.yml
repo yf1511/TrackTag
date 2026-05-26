@@ -1,0 +1,28 @@
+name: Update landing page version
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update version badge in index.html
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          # Strip leading 'v' for display (v1.0.3 → 1.0.3)
+          DISPLAY="${VERSION#v}"
+          sed -i "s/>v[0-9]\+\.[0-9]\+\.[0-9]\+</>v${DISPLAY}</g" docs/index.html
+
+      - name: Commit updated index.html
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/index.html
+          git diff --cached --quiet || git commit -m "chore: bump landing page version to ${{ github.event.release.tag_name }}"
+          git push
