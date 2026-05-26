@@ -2372,34 +2372,43 @@ class MainWindow(QMainWindow):
         if not self._mac_tb_done:
             self._mac_tb_done = True
             QTimer.singleShot(0, lambda: _apply_mac_titlebar(int(self.winId())))
+            # License verify + update check after window is fully shown
+            QTimer.singleShot(1000, self._post_show_checks)
 
-            # ── License background verify (non-blocking, 1 s delay) ──────
-            from PyQt6.QtCore import QThread
-            class _LicVerifyThread(QThread):
-                def run(self_t):
-                    if _lic.verify_background():
-                        from PyQt6.QtCore import QMetaObject, Qt
-                        QMetaObject.invokeMethod(
-                            self, "_apply_pro_from_verify",
-                            Qt.ConnectionType.QueuedConnection
-                        )
-            self._lic_thread = _LicVerifyThread()
-            QTimer.singleShot(800, self._lic_thread.start)
+    def _post_show_checks(self):
+        """Runs 1 s after window shows — license verify + update check."""
+        # License: check in background thread using a proper signal
+        try:
+            from PyQt6.QtCore import QThread, pyqtSignal as _sig
 
-            # ── Auto-update check ─────────────────────────────────────────
+            class _LicThread(QThread):
+                is_pro = _sig(bool)
+                def run(self):
+                    try:
+                        result = _lic.verify_background()
+                    except Exception:
+                        result = False
+                    self.is_pro.emit(result)
+
+            self._lic_thread = _LicThread()
+            self._lic_thread.is_pro.connect(self._on_lic_verified)
+            self._lic_thread.start()
+        except Exception as ex:
+            print(f"[license] startup check failed: {ex}")
+
+        # Update check
+        try:
             _uc = UpdateChecker(self)
             _uc.start()
+        except Exception as ex:
+            print(f"[updater] startup check failed: {ex}")
 
-    @staticmethod
-    def _apply_pro_from_verify_static():
-        pass  # placeholder — actual slot below
-
-    def _apply_pro_from_verify(self):
+    def _on_lic_verified(self, active: bool):
         global _is_pro
-        _is_pro = True
-        # Find the NavSidebar and update its badge
-        if hasattr(self, 'nav'):
-            self.nav._on_pro_activated()
+        if active:
+            _is_pro = True
+            if hasattr(self, 'nav'):
+                self.nav._on_pro_activated()
 
     def _setup_menu(self):
         mb=self.menuBar()
