@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# macOS
+.DS_Store
+.AppleDouble
+*.dmg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Secrets / local config
+*.env
+sidebar_genres.json
