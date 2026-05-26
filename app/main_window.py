@@ -11,8 +11,7 @@ import qtawesome as qta
 _ICON_PATH    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "app-icon.png")
 _GENRES_FILE  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sidebar_genres.json")
 
-# ── Pro license ────────────────────────────────────────────────────────────────
-_PRO_KEYS = {"TRACKTAG-BETA-2024-PRO", "TRACKTAG-PRO-UNLIMITED"}
+# ── Pro license (verified against remote server, no local key list) ───────────
 _is_pro = False
 
 from PyQt6.QtWidgets import (
@@ -32,6 +31,7 @@ from PyQt6.QtGui import (
 from .audio_handler import AudioFile, SUPPORTED_EXTENSIONS
 from .cover_search import MetaSearchDialog
 from .updater import UpdateChecker
+from . import license as _lic
 
 
 def _ico(name: str, color: str = "#a1a5b3", size: int = 16) -> QIcon:
@@ -595,22 +595,33 @@ class ProActivateDialog(QDialog):
     def _try_activate(self):
         global _is_pro
         key = self._field.text().strip().upper()
-        if key in _PRO_KEYS:
+        if not key:
+            return
+
+        # Disable UI while contacting server
+        self._act_btn.setEnabled(False)
+        self._act_btn.setText("Prüfe…")
+        self._status.setText("")
+        QApplication.processEvents()
+
+        ok, err = _lic.activate(key)
+
+        if ok:
             _is_pro = True
-            self._status.setText("✓  License activated successfully!")
+            self._status.setText("✓  Lizenz erfolgreich aktiviert!")
             self._status.setStyleSheet(
-                f"color:#22c55e;font-size:11px;font-weight:600;border:none;background:transparent;")
-            self._act_btn.setEnabled(False)
+                "color:#22c55e;font-size:11px;font-weight:600;border:none;background:transparent;")
             self._field.setEnabled(False)
             self.activated.emit()
             QTimer.singleShot(1200, self.accept)
         else:
-            self._status.setText("Invalid license key — please check and try again.")
+            self._act_btn.setEnabled(True)
+            self._act_btn.setText("Activate")
+            self._status.setText(err or "Ungültiger Lizenzschlüssel.")
             self._status.setStyleSheet(
                 f"color:{C_ACCENT};font-size:11px;border:none;background:transparent;")
             self._field.setStyleSheet(
-                self._field.styleSheet() +
-                f"QLineEdit{{border-color:{C_ACCENT};}}")
+                self._field.styleSheet() + f"QLineEdit{{border-color:{C_ACCENT};}}")
 
 
 # ── Sidebar drag-drop zone ────────────────────────────────────────────────────
@@ -1133,6 +1144,7 @@ class NavSidebar(QWidget):
         lay.addLayout(row)
 
         if dlg.exec() == QDialog.DialogCode.Accepted:
+            _lic.deactivate()
             self._on_pro_deactivated()
 
     def _on_pro_activated(self):
@@ -2360,12 +2372,34 @@ class MainWindow(QMainWindow):
         if not self._mac_tb_done:
             self._mac_tb_done = True
             QTimer.singleShot(0, lambda: _apply_mac_titlebar(int(self.winId())))
-            # ── Auto-update check (fires 2 s after window is shown) ──────
-            # Set your GitHub username + repo to enable:
-            #   UpdateChecker.GITHUB_OWNER = "yourusername"
-            #   UpdateChecker.GITHUB_REPO  = "tracktag"
+
+            # ── License background verify (non-blocking, 1 s delay) ──────
+            from PyQt6.QtCore import QThread
+            class _LicVerifyThread(QThread):
+                def run(self_t):
+                    if _lic.verify_background():
+                        from PyQt6.QtCore import QMetaObject, Qt
+                        QMetaObject.invokeMethod(
+                            self, "_apply_pro_from_verify",
+                            Qt.ConnectionType.QueuedConnection
+                        )
+            self._lic_thread = _LicVerifyThread()
+            QTimer.singleShot(800, self._lic_thread.start)
+
+            # ── Auto-update check ─────────────────────────────────────────
             _uc = UpdateChecker(self)
             _uc.start()
+
+    @staticmethod
+    def _apply_pro_from_verify_static():
+        pass  # placeholder — actual slot below
+
+    def _apply_pro_from_verify(self):
+        global _is_pro
+        _is_pro = True
+        # Find the NavSidebar and update its badge
+        if hasattr(self, 'nav'):
+            self.nav._on_pro_activated()
 
     def _setup_menu(self):
         mb=self.menuBar()
