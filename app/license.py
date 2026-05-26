@@ -111,7 +111,7 @@ def activate(key: str) -> tuple[bool, str]:
     resp = _post("/activate", {"key": key, "machine_id": mid})
 
     if resp is None:
-        return False, "Server nicht erreichbar. Prüfe deine Internetverbindung."
+        return False, "Server unreachable. Please check your internet connection."
 
     if resp.get("ok"):
         _save({
@@ -124,11 +124,11 @@ def activate(key: str) -> tuple[bool, str]:
 
     error = resp.get("error", "unknown")
     messages = {
-        "invalid_key":                    "Ungültiger Lizenzschlüssel.",
-        "key_revoked":                    "Dieser Lizenzschlüssel wurde gesperrt.",
+        "invalid_key":                    "Invalid license key.",
+        "key_revoked":                    "This license key has been revoked.",
         "already_active_on_other_machine": (
-            "Dieser Key ist bereits auf einem anderen Mac aktiv.\n"
-            "Deaktiviere ihn dort zuerst (Einstellungen → Lizenz → Deaktivieren)."
+            "This key is already active on another Mac.\n"
+            "Deactivate it there first (Settings → License → Deactivate)."
         ),
     }
     return False, messages.get(error, f"Fehler: {error}")
@@ -198,7 +198,7 @@ def verify_background() -> bool:
 
 
 def is_pro_active() -> bool:
-    """Schnelle lokale Prüfung ohne Netzwerk (für UI-State)."""
+    """Fast local check without network (for UI state)."""
     data = _load()
     if not data.get("key"):
         return False
@@ -210,6 +210,6 @@ def is_pro_active() -> bool:
 
 
 def get_active_key() -> str | None:
-    """Gibt den aktiven Key zurück oder None."""
+    """Returns the active key or None."""
     data = _load()
     return data.get("key") if is_pro_active() else None

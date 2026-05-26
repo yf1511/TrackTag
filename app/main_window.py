@@ -439,7 +439,7 @@ class CoverLabel(QLabel):
 
     def _idle(self):
         self._has = False; self.clear()
-        self.setText("Cover hier ablegen\noder klicken\n\n⌘V zum Einfügen")
+        self.setText("Drop cover here\nor click\n\n⌘V to paste")
         self.setStyleSheet(self._IDLE)
 
     def set_cover_data(self, data: bytes, mime: str = "image/jpeg"):
@@ -600,7 +600,7 @@ class ProActivateDialog(QDialog):
 
         # Disable UI while contacting server
         self._act_btn.setEnabled(False)
-        self._act_btn.setText("Prüfe…")
+        self._act_btn.setText("Checking…")
         self._status.setText("")
         QApplication.processEvents()
 
@@ -608,7 +608,7 @@ class ProActivateDialog(QDialog):
 
         if ok:
             _is_pro = True
-            self._status.setText("✓  Lizenz erfolgreich aktiviert!")
+            self._status.setText("✓  License activated successfully!")
             self._status.setStyleSheet(
                 "color:#22c55e;font-size:11px;font-weight:600;border:none;background:transparent;")
             self._field.setEnabled(False)
@@ -617,7 +617,7 @@ class ProActivateDialog(QDialog):
         else:
             self._act_btn.setEnabled(True)
             self._act_btn.setText("Activate")
-            self._status.setText(err or "Ungültiger Lizenzschlüssel.")
+            self._status.setText(err or "Invalid license key.")
             self._status.setStyleSheet(
                 f"color:{C_ACCENT};font-size:11px;border:none;background:transparent;")
             self._field.setStyleSheet(
@@ -723,7 +723,7 @@ class DragOverlay(QWidget):
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 20, 0, 0),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-                         "Audio-Dateien ablegen")
+                         "Drop audio files here")
         font2 = QFont("-apple-system", 11)
         painter.setFont(font2)
         painter.setPen(QColor(167, 139, 250, 160))
@@ -964,7 +964,7 @@ class NavSidebar(QWidget):
             QPushButton:hover{{background:{C_BORDER};color:{C_TEXT};}}
             QPushButton:pressed{{background:{C_PRIMARY};color:#fff;border-color:{C_PRIMARY};}}
         """)
-        add_genre_btn.setToolTip("Genre hinzufügen")
+        add_genre_btn.setToolTip("Add genre")
         add_genre_btn.clicked.connect(self._add_genre_prompt)
         genres_hdr_row.addWidget(add_genre_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         cl.addLayout(genres_hdr_row)
@@ -1045,7 +1045,7 @@ class NavSidebar(QWidget):
     def _add_genre_prompt(self):
         from PyQt6.QtWidgets import QInputDialog
         text, ok = QInputDialog.getText(
-            self, "Genre hinzufügen", "Genre Name:", QLineEdit.EchoMode.Normal)
+            self, "Add Genre", "Genre name:", QLineEdit.EchoMode.Normal)
         if ok and text.strip():
             genre = text.strip()
             if genre not in self._genres:
@@ -1091,7 +1091,7 @@ class NavSidebar(QWidget):
             QMenu::item{{padding:6px 22px;}}
             QMenu::item:selected{{background:{C_PRIMARY};border-radius:4px;color:white;}}
         """)
-        rm = menu.addAction(f'"{genre}" entfernen')
+        rm = menu.addAction(f'Remove "{genre}"')
         action = menu.exec(nav.mapToGlobal(pos))
         if action == rm:
             self._remove_genre(genre)
@@ -1262,18 +1262,18 @@ class TagPanel(QWidget):
                          f"QPushButton:disabled{{color:{C_TEXT3};border-color:{C_SURFACE};}}")
 
         row1 = QHBoxLayout(); row1.setSpacing(7)
-        bt = QPushButton("Tags suchen"); bt.setFixedHeight(34)
+        bt = QPushButton("Search Tags"); bt.setFixedHeight(34)
         bt.setStyleSheet(btn_ss_active); bt.clicked.connect(lambda: self._search("tags_only"))
-        bc = QPushButton("Nur Cover");   bc.setFixedHeight(34)
+        bc = QPushButton("Cover Only");  bc.setFixedHeight(34)
         bc.setStyleSheet(btn_ss_active); bc.clicked.connect(lambda: self._search("cover_only"))
         row1.addWidget(bt,1); row1.addWidget(bc,1)
         csv.addLayout(row1)
 
-        bp = QPushButton("Einfügen  (⌘V)"); bp.setFixedHeight(34)
+        bp = QPushButton("Paste  (⌘V)"); bp.setFixedHeight(34)
         bp.setStyleSheet(btn_ss_active); bp.clicked.connect(self._paste)
         csv.addWidget(bp)
 
-        self.del_btn = QPushButton("Cover löschen"); self.del_btn.setFixedHeight(34)
+        self.del_btn = QPushButton("Remove Cover"); self.del_btn.setFixedHeight(34)
         self.del_btn.setStyleSheet(f"""
             QPushButton{{background:rgba(255,45,117,0.10);color:{C_ACCENT};
                 border:1px solid rgba(255,45,117,0.25);border-radius:9px;
@@ -1356,7 +1356,7 @@ class TagPanel(QWidget):
         bl = QVBoxLayout(bar); bl.setContentsMargins(16,10,16,14); bl.setSpacing(8)
 
         # Rename button — subtle, arrow-style
-        self.rename_btn = QPushButton("— Umbenennen  →  Interpret – Titel  ›")
+        self.rename_btn = QPushButton("— Rename  →  Artist – Title  ›")
         self.rename_btn.setFixedHeight(34)
         self.rename_btn.setStyleSheet(f"""
             QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};
@@ -1370,7 +1370,7 @@ class TagPanel(QWidget):
 
         # Save + More row
         save_row = QHBoxLayout(); save_row.setSpacing(8)
-        self.save_btn = QPushButton("  Änderungen speichern")
+        self.save_btn = QPushButton("  Save Changes")
         self.save_btn.setFixedHeight(42); self.save_btn.setShortcut("Ctrl+S")
         self.save_btn.setStyleSheet(f"""
             QPushButton{{
@@ -1523,7 +1523,7 @@ class TagPanel(QWidget):
 
     def _pick_cover(self):
         if not self._files: return
-        path,_ = QFileDialog.getOpenFileName(self,"Cover auswählen","",
+        path,_ = QFileDialog.getOpenFileName(self,"Select Cover","",
             "Bilder (*.jpg *.jpeg *.png *.bmp *.webp)")
         if not path: return
         with open(path,"rb") as fh: data=fh.read()
@@ -1574,9 +1574,9 @@ class TagPanel(QWidget):
                             f"QMenu::item:selected{{background:{C_PRIMARY};}}"
                             f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
         menu.addAction("📂  Cover aus Datei…").triggered.connect(self._pick_cover)
-        menu.addAction("📋  Cover einfügen (⌘V)").triggered.connect(self._paste)
+        menu.addAction("📋  Paste Cover (⌘V)").triggered.connect(self._paste)
         menu.addSeparator()
-        menu.addAction("🗑  Cover löschen").triggered.connect(self._del_cover)
+        menu.addAction("🗑  Remove Cover").triggered.connect(self._del_cover)
         menu.exec(self.save_btn.mapToGlobal(self.save_btn.rect().topRight()))
 
     def _rename(self):
@@ -1598,8 +1598,8 @@ class TagPanel(QWidget):
             except OSError as e: errors.append(f"❌  '{f.filename}': {e}")
         self.tags_changed.emit()
         if errors:
-            QMessageBox.warning(self.window(),"Umbenennen",
-                f"{renamed} umbenannt, {skipped} übersprungen.\n\n"+"\n".join(errors))
+            QMessageBox.warning(self.window(), "Rename",
+                f"{renamed} renamed, {skipped} skipped.\n\n" + "\n".join(errors))
 
     def keyPressEvent(self, e):
         if e.matches(QKeySequence.StandardKey.Paste): self._paste()
@@ -2020,8 +2020,8 @@ class SettingsDialog(QDialog):
         v.addSpacing(2)
 
         info = QLabel(
-            'Drücke die Leertaste oder wähle "Quick Look" im Kontextmenü,\n'
-            'um einen Track mit der macOS-Vorschau abzuspielen.')
+            'Press Space or choose "Quick Look" from the context menu\n'
+            'to preview a track using macOS Quick Look.')
         info.setStyleSheet(f"color:{C_TEXT2};font-size:12px;background:transparent;border:none;")
         info.setWordWrap(True)
         v.addWidget(info)
@@ -2403,25 +2403,25 @@ class MainWindow(QMainWindow):
 
     def _setup_menu(self):
         mb=self.menuBar()
-        fm=mb.addMenu("Datei")
-        self._act(fm,"Dateien öffnen…",  self._open_files,  "Ctrl+O")
-        self._act(fm,"Ordner öffnen…",   self._open_folder, "Ctrl+Shift+O")
+        fm=mb.addMenu("File")
+        self._act(fm,"Open Files…",      self._open_files,  "Ctrl+O")
+        self._act(fm,"Open Folder…",     self._open_folder, "Ctrl+Shift+O")
         fm.addSeparator()
-        self._act(fm,"Auswahl speichern",self._save_sel,    "Ctrl+S")
-        self._act(fm,"Alle speichern",   self._save_all,    "Ctrl+Shift+S")
+        self._act(fm,"Save Selection",   self._save_sel,    "Ctrl+S")
+        self._act(fm,"Save All",         self._save_all,    "Ctrl+Shift+S")
         fm.addSeparator()
-        self._act(fm,"Fenster schließen",self.close,        "Ctrl+W")
-        self._act(fm,"Beenden",          self.close,        "Ctrl+Q")
-        em=mb.addMenu("Bearbeiten")
-        self._act(em,"Alle auswählen",   self.table.selectAll,"Ctrl+A")
-        self._act(em,"Auswahl entfernen",self._remove_sel,  "Backspace")
-        self._act(em,"Liste leeren",     self._clear_all)
+        self._act(fm,"Close Window",     self.close,        "Ctrl+W")
+        self._act(fm,"Quit",             self.close,        "Ctrl+Q")
+        em=mb.addMenu("Edit")
+        self._act(em,"Select All",       self.table.selectAll,"Ctrl+A")
+        self._act(em,"Remove Selected",  self._remove_sel,  "Backspace")
+        self._act(em,"Clear List",       self._clear_all)
         em.addSeparator()
-        self._act(em,"Spalten anpassen", self._fit_cols,    "Ctrl+Shift+R")
-        sm=mb.addMenu("Suchen")
-        self._act(sm,"Tags suchen…",
+        self._act(em,"Fit Columns",      self._fit_cols,    "Ctrl+Shift+R")
+        sm=mb.addMenu("Search")
+        self._act(sm,"Search Tags…",
             lambda: self.tag_panel._search("tags_only"),  "Ctrl+F")
-        self._act(sm,"Nur Cover suchen…",
+        self._act(sm,"Cover Only…",
             lambda: self.tag_panel._search("cover_only"), "Ctrl+Shift+F")
 
     @staticmethod
@@ -2555,13 +2555,13 @@ class MainWindow(QMainWindow):
         dur = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
         self.statusBar().showMessage(
             f"  {n} file{'s' if n!=1 else ''}  ·  Total {dur}"
-            f"  ·  ⌘S save  ·  ⌘A select all  ·  Leertaste Quick Look")
+            f"  ·  ⌘S save  ·  ⌘A select all  ·  Space Quick Look")
 
     def closeEvent(self, e):
         unsaved=[f for f in self.audio_files if f._modified]
         if unsaved:
-            r=QMessageBox.question(self,"Nicht gespeicherte Änderungen",
-                f"{len(unsaved)} Datei(en) haben ungespeicherte Änderungen.\nTrotzdem beenden?",
+            r=QMessageBox.question(self,"Unsaved Changes",
+                f"{len(unsaved)} file(s) have unsaved changes.\nQuit anyway?",
                 QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
             if r==QMessageBox.StandardButton.Cancel: e.ignore(); return
         e.accept()
@@ -2569,12 +2569,12 @@ class MainWindow(QMainWindow):
     # ── File management ───────────────────────────────────────────────────────
 
     def _open_files(self):
-        paths,_=QFileDialog.getOpenFileNames(self,"Audiodateien öffnen","",
+        paths,_=QFileDialog.getOpenFileNames(self,"Open Audio Files","",
             "Audio (*.mp3 *.flac *.wav *.aiff *.aif *.m4a *.mp4)")
         if paths: self._add_files(paths)
 
     def _open_folder(self):
-        folder=QFileDialog.getExistingDirectory(self,"Ordner öffnen")
+        folder=QFileDialog.getExistingDirectory(self,"Open Folder")
         if not folder: return
         paths=[]
         for root,_,files in os.walk(folder):
@@ -2659,8 +2659,8 @@ class MainWindow(QMainWindow):
     def _save_files(self, files):
         errors=[af.filename for af in files if not af.save()]
         if errors:
-            QMessageBox.warning(self,"Speicherfehler",
-                "Konnte nicht gespeichert werden:\n\n"+"\n".join(errors))
+            QMessageBox.warning(self,"Save Error",
+                "Could not save:\n\n"+"\n".join(errors))
         else:
             self.statusBar().showMessage(f"✓  {len(files)} file(s) saved.")
 
@@ -2692,16 +2692,16 @@ class MainWindow(QMainWindow):
                             f"QMenu::item{{padding:7px 16px;border-radius:6px;font-size:12px;}}"
                             f"QMenu::item:selected{{background:{C_PRIMARY};}}"
                             f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
-        menu.addAction(f"▶  Quick Look (Leertaste)").triggered.connect(
+        menu.addAction(f"▶  Quick Look (Space)").triggered.connect(
             lambda: _quick_look(sel[0].path) if sel else None)
-        menu.addAction(f"💾  Speichern ({len(sel)} Datei(en))").triggered.connect(self._save_sel)
+        menu.addAction(f"💾  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
         menu.addSeparator()
-        menu.addAction("🔍  Tags suchen…").triggered.connect(lambda: self.tag_panel._search("tags_only"))
-        menu.addAction("🖼  Nur Cover suchen…").triggered.connect(lambda: self.tag_panel._search("cover_only"))
+        menu.addAction("🔍  Search Tags…").triggered.connect(lambda: self.tag_panel._search("tags_only"))
+        menu.addAction("🖼  Cover Only…").triggered.connect(lambda: self.tag_panel._search("cover_only"))
         menu.addSeparator()
-        menu.addAction("✏️  Umbenennen").triggered.connect(self.tag_panel._rename)
+        menu.addAction("✏️  Rename").triggered.connect(self.tag_panel._rename)
         menu.addSeparator()
-        menu.addAction("✕  Aus Liste entfernen").triggered.connect(self._remove_sel)
+        menu.addAction("✕  Remove from List").triggered.connect(self._remove_sel)
         menu.exec(self.table.mapToGlobal(pos))
 
     # ── Drag & drop ───────────────────────────────────────────────────────────

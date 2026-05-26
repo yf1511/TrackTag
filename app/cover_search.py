@@ -497,7 +497,7 @@ class SmartBanner(QFrame):
         self.at_lbl.hide()
         meta_col.addWidget(self.at_lbl)
 
-        self.meta_lbl = QLabel("Suche läuft…")
+        self.meta_lbl = QLabel("Searching…")
         self.meta_lbl.setStyleSheet("color: #ebebf5; font-size: 12px;")
         self.meta_lbl.setWordWrap(True)
         meta_col.addWidget(self.meta_lbl)
@@ -508,7 +508,7 @@ class SmartBanner(QFrame):
         row.addLayout(meta_col, 1)
 
         # Apply button
-        self.apply_btn = QPushButton("✓  Alles übernehmen")
+        self.apply_btn = QPushButton("✓  Apply All")
         self.apply_btn.setFixedSize(160, 38)
         self.apply_btn.setEnabled(False)
         self.apply_btn.setStyleSheet("""
@@ -739,7 +739,7 @@ class MetaSearchDialog(QDialog):
         i_layout.addLayout(chips_row)
 
         # Status
-        self.status = QLabel("Suchbegriff eingeben und Enter drücken.")
+        self.status = QLabel("Enter a search term and press Enter.")
         self.status.setStyleSheet("color:#48484a;font-size:11px;")
         i_layout.addWidget(self.status)
 
@@ -779,7 +779,7 @@ class MetaSearchDialog(QDialog):
 
         # Checkboxes
         chk_row = QHBoxLayout(); chk_row.setSpacing(12)
-        take_lbl = QLabel("Übernehmen:")
+        take_lbl = QLabel("Apply:")
         take_lbl.setStyleSheet("color:#636366;font-size:10px;font-weight:600;")
         chk_row.addWidget(take_lbl)
         self.chk = {}
@@ -788,11 +788,11 @@ class MetaSearchDialog(QDialog):
         # In all mode: show everything
         chk_fields = []
         if self._preset != "cover_only":
-            chk_fields += [("artist","🎤 Artist"), ("title","📝 Titel")]
+            chk_fields += [("artist","🎤 Artist"), ("title","📝 Title")]
         if self._preset != "tags_only":
             chk_fields += [("cover","🖼 Cover")]
         chk_fields += [("genre","🎵 Genre"), ("label","🏷 Label"),
-                       ("year","📅 Jahr"), ("bpm","♩ BPM"), ("key","🎹 Key")]
+                       ("year","📅 Year"), ("bpm","♩ BPM"), ("key","🎹 Key")]
 
         _chk_style = """
             QCheckBox { color:#ebebf5; font-size:11px; spacing:4px; }
@@ -827,7 +827,7 @@ class MetaSearchDialog(QDialog):
             QPushButton:hover { background:#3a3a3c; }
         """)
         cb.clicked.connect(self.reject); br.addWidget(cb)
-        self.ok_btn = QPushButton("✓  Auswahl übernehmen")
+        self.ok_btn = QPushButton("✓  Apply Selection")
         self.ok_btn.setFixedHeight(38)
         self.ok_btn.setEnabled(False)
         self.ok_btn.setDefault(True)
@@ -911,8 +911,8 @@ class MetaSearchDialog(QDialog):
             if any(r["source"] == s for r in self._results.values())
         )
         self.status.setText(
-            f"{n} Ergebnis(se) von {src_names} — "
-            "einzeln auswählen oder ⭐ Smart Match nutzen")
+            f"{n} result(s) from {src_names} — "
+            "select individually or use ⭐ Smart Match")
 
         # Compute smart match
         self._smart = self._compute_smart()
@@ -1031,7 +1031,7 @@ class MetaSearchDialog(QDialog):
             self.result_selected.emit(payload)
             self.accept()
         else:
-            self.status.setText("Nichts zum Übernehmen ausgewählt.")
+            self.status.setText("Nothing selected to apply.")
             self.banner.apply_btn.setEnabled(True)
             self.ok_btn.setEnabled(True)
 

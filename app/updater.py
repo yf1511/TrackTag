@@ -86,11 +86,11 @@ class UpdateBanner(QWidget):
         icon.setStyleSheet(f"color:{_C_PRIMARY};font-size:12px;font-weight:700;")
         row.addWidget(icon)
 
-        msg = QLabel(f"Update verfügbar: TrackTag {version.lstrip('v')}  –  Jetzt herunterladen und mehr Platz für neue Features!")
+        msg = QLabel(f"Update available: TrackTag {version.lstrip('v')}  –  Download now for new features and improvements!")
         msg.setStyleSheet(f"color:{_C_TEXT};font-size:12px;")
         row.addWidget(msg, 1)
 
-        dl_btn = QPushButton("Herunterladen →")
+        dl_btn = QPushButton("Download →")
         dl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         dl_btn.setStyleSheet(f"""
             QPushButton {{
