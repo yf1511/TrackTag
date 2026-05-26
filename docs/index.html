@@ -111,20 +111,42 @@
       position: relative;
     }
 
-    /* background glow blobs */
-    .hero::before {
-      content: '';
-      position: fixed; top: -200px; left: -200px;
-      width: 700px; height: 700px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(124,58,237,0.18) 0%, transparent 70%);
-      pointer-events: none;
+    /* Animated glow orbs */
+    .glow-orb {
+      position: absolute; border-radius: 50%;
+      filter: blur(80px); opacity: 0.5;
     }
-    .hero::after {
-      content: '';
-      position: fixed; bottom: -200px; right: -100px;
-      width: 600px; height: 600px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(255,45,117,0.12) 0%, transparent 70%);
-      pointer-events: none;
+    .glow-orb-1 {
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, rgba(124,58,237,0.35), transparent 70%);
+      top: -150px; left: -100px;
+      animation: orbFloat1 12s ease-in-out infinite;
+    }
+    .glow-orb-2 {
+      width: 500px; height: 500px;
+      background: radial-gradient(circle, rgba(255,45,117,0.2), transparent 70%);
+      bottom: -100px; right: 10%;
+      animation: orbFloat2 15s ease-in-out infinite;
+    }
+    .glow-orb-3 {
+      width: 350px; height: 350px;
+      background: radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%);
+      top: 40%; right: 30%;
+      animation: orbFloat3 18s ease-in-out infinite;
+    }
+    @keyframes orbFloat1 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      33%       { transform: translate(60px, 40px) scale(1.08); }
+      66%       { transform: translate(-30px, 70px) scale(0.95); }
+    }
+    @keyframes orbFloat2 {
+      0%, 100% { transform: translate(0, 0) scale(1); }
+      40%       { transform: translate(-50px, -60px) scale(1.1); }
+      70%       { transform: translate(40px, 30px) scale(0.92); }
+    }
+    @keyframes orbFloat3 {
+      0%, 100% { transform: translate(0, 0); }
+      50%       { transform: translate(30px, -40px); }
     }
 
     .hero-left { position: relative; z-index: 1; }
@@ -588,8 +610,26 @@
 </div>
 
 <!-- ── HERO ── -->
-<section style="background: var(--bg);">
-  <div class="hero">
+<section style="background: var(--bg); position:relative; overflow:hidden;">
+
+  <!-- Dot grid -->
+  <div style="
+    position:absolute; inset:0; z-index:0;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 75%);
+    pointer-events:none;
+  "></div>
+
+  <!-- Animated glow orbs -->
+  <div style="position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;">
+    <div class="glow-orb glow-orb-1"></div>
+    <div class="glow-orb glow-orb-2"></div>
+    <div class="glow-orb glow-orb-3"></div>
+  </div>
+
+  <div class="hero" style="position:relative;z-index:1;">
     <div class="hero-left">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:28px;">
         <div class="hero-pill" style="margin-bottom:0;">
@@ -600,8 +640,8 @@
         </div>
       </div>
       <h1>
-        Stop searching.<br>
-        Start <span class="grad-text">creating.</span>
+        Organize. Tag.<br>
+        Find. <span class="grad-text">Your music.</span>
       </h1>
       <p class="hero-sub">
         Your music library, finally under control. TrackTag gives you the speed and clarity to find any track in seconds — so you stay in the zone, not in the folders.
