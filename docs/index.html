@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TrackTag — Organize. Tag. Find. Your Music.</title>
+  <meta name="description" content="The ultimate music library manager for producers. Smart tagging, powerful search and a workflow that keeps you creative." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #06070d;
+      --surface:  #0e101a;
+      --border:   #1e2130;
+      --text:     #f1f3f5;
+      --text2:    #8b8fa8;
+      --purple:   #7c3aed;
+      --pink:     #ff2d75;
+      --grad:     linear-gradient(135deg, #7c3aed, #ff2d75);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      overflow-x: hidden;
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 40px;
+      height: 64px;
+      background: rgba(6,7,13,0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none;
+    }
+    .nav-logo-icon {
+      width: 36px; height: 36px; border-radius: 9px;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 16px; color: #fff;
+    }
+    .nav-logo-name {
+      font-size: 17px; font-weight: 700; color: var(--text);
+    }
+    .nav-logo-badge {
+      font-size: 10px; font-weight: 700; color: #fff;
+      background: var(--grad);
+      padding: 2px 7px; border-radius: 4px; letter-spacing: 0.04em;
+    }
+    .nav-links {
+      display: flex; gap: 36px; list-style: none;
+    }
+    .nav-links a {
+      color: var(--text2); text-decoration: none;
+      font-size: 14px; font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--text); }
+    .nav-actions { display: flex; gap: 12px; align-items: center; }
+    .btn-outline {
+      padding: 8px 18px; border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent; color: var(--text);
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      text-decoration: none;
+      transition: border-color 0.2s, background 0.2s;
+      display: flex; align-items: center; gap: 7px;
+    }
+    .btn-outline:hover { border-color: var(--purple); background: rgba(124,58,237,0.08); }
+    .btn-primary {
+      padding: 8px 18px; border-radius: 8px;
+      background: var(--grad);
+      color: #fff; font-size: 13px; font-weight: 700;
+      cursor: pointer; text-decoration: none; border: none;
+      display: flex; align-items: center; gap: 7px;
+      transition: opacity 0.2s;
+    }
+    .btn-primary:hover { opacity: 0.88; }
+
+    /* ── HERO ── */
+    .hero {
+      min-height: 100vh;
+      padding: 120px 40px 80px;
+      display: grid;
+      grid-template-columns: 1fr 1.15fr;
+      align-items: center;
+      gap: 60px;
+      max-width: 1280px;
+      margin: 0 auto;
+      position: relative;
+    }
+
+    /* background glow blobs */
+    .hero::before {
+      content: '';
+      position: fixed; top: -200px; left: -200px;
+      width: 700px; height: 700px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(124,58,237,0.18) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero::after {
+      content: '';
+      position: fixed; bottom: -200px; right: -100px;
+      width: 600px; height: 600px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,45,117,0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-left { position: relative; z-index: 1; }
+
+    .hero-pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 12px; font-weight: 600; color: var(--text2);
+      margin-bottom: 28px;
+    }
+    .hero-pill span { color: var(--purple); }
+
+    h1 {
+      font-size: clamp(42px, 5vw, 64px);
+      font-weight: 900;
+      line-height: 1.08;
+      letter-spacing: -0.02em;
+      margin-bottom: 20px;
+    }
+    h1 .grad-text {
+      background: var(--grad);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .hero-sub {
+      font-size: 17px; color: var(--text2);
+      line-height: 1.65; max-width: 420px;
+      margin-bottom: 36px;
+    }
+
+    .hero-ctas {
+      display: flex; flex-wrap: wrap; gap: 12px;
+      margin-bottom: 32px;
+    }
+    .cta-big {
+      padding: 14px 28px; border-radius: 12px;
+      font-size: 15px; font-weight: 700;
+      cursor: pointer; text-decoration: none;
+      display: flex; flex-direction: column;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .cta-big:hover { opacity: 0.9; transform: translateY(-1px); }
+    .cta-big small { font-size: 11px; font-weight: 400; opacity: 0.75; margin-top: 1px; }
+    .cta-download {
+      background: var(--grad); color: #fff;
+      align-items: flex-start; gap: 2px;
+    }
+    .cta-download .cta-label { display: flex; align-items: center; gap: 8px; }
+    .cta-license {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      align-items: flex-start; gap: 2px;
+    }
+    .cta-license .cta-label { display: flex; align-items: center; gap: 8px; }
+
+    .trust-badges {
+      display: flex; flex-wrap: wrap; gap: 20px;
+    }
+    .badge {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 13px; color: var(--text2);
+    }
+    .badge svg { color: var(--purple); flex-shrink: 0; }
+
+    /* ── APP MOCKUP ── */
+    .hero-right { position: relative; z-index: 1; }
+
+    .mockup-wrap {
+      border-radius: 16px;
+      border: 1px solid rgba(124,58,237,0.35);
+      background: #0b0d17;
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.04),
+        0 40px 120px rgba(0,0,0,0.7),
+        0 0 80px rgba(124,58,237,0.12);
+      overflow: hidden;
+    }
+    .mockup-bar {
+      height: 36px;
+      background: #131520;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center;
+      padding: 0 14px; gap: 7px;
+    }
+    .dot { width: 11px; height: 11px; border-radius: 50%; }
+    .dot-r { background: #ff5f57; }
+    .dot-y { background: #ffbd2e; }
+    .dot-g { background: #28c840; }
+
+    .mockup-inner {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      height: 420px;
+    }
+    .mock-sidebar {
+      background: #0d0f1c;
+      border-right: 1px solid var(--border);
+      padding: 16px 12px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .mock-logo-row {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 14px; padding: 0 4px;
+    }
+    .mock-logo-icon {
+      width: 26px; height: 26px; border-radius: 6px;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 900; color: #fff;
+    }
+    .mock-logo-text { font-size: 12px; font-weight: 700; }
+    .mock-pro-badge {
+      font-size: 8px; font-weight: 700;
+      background: var(--grad); color: #fff;
+      padding: 1px 5px; border-radius: 3px;
+    }
+
+    .mock-search {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 7px 10px;
+      font-size: 11px; color: var(--text2);
+      margin-bottom: 10px;
+    }
+
+    .mock-add-btn {
+      background: var(--grad);
+      border-radius: 7px;
+      padding: 8px;
+      text-align: center;
+      font-size: 11px; font-weight: 700; color: #fff;
+      margin-bottom: 14px;
+    }
+
+    .mock-section-label {
+      font-size: 9px; font-weight: 700; color: var(--text2);
+      letter-spacing: 0.08em; text-transform: uppercase;
+      padding: 0 4px; margin-bottom: 2px;
+    }
+    .mock-nav-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 5px 8px; border-radius: 6px;
+      font-size: 11px; color: var(--text2);
+    }
+    .mock-nav-item.active {
+      background: rgba(124,58,237,0.18); color: var(--text);
+    }
+    .mock-nav-count {
+      font-size: 10px; color: var(--text2);
+      background: rgba(255,255,255,0.07);
+      padding: 1px 6px; border-radius: 10px;
+    }
+
+    .mock-genre-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 4px 8px; border-radius: 5px;
+      font-size: 10px; color: var(--text2);
+    }
+
+    .mock-pro-active {
+      margin-top: auto;
+      background: rgba(34,197,94,0.1);
+      border: 1px solid rgba(34,197,94,0.2);
+      border-radius: 7px; padding: 8px 10px;
+    }
+    .mock-pro-dot { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #22c55e; font-weight: 600; }
+    .mock-pro-sub { font-size: 9px; color: var(--text2); margin-top: 2px; }
+
+    .mock-main {
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    .mock-topbar {
+      background: #0f1120;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .mock-title-row { display: flex; align-items: center; gap: 10px; }
+    .mock-title { font-size: 13px; font-weight: 700; }
+    .mock-count { font-size: 11px; color: var(--text2); }
+    .mock-filters { display: flex; gap: 6px; }
+    .mock-filter-pill {
+      font-size: 10px; color: var(--text2);
+      border: 1px solid var(--border);
+      border-radius: 5px; padding: 3px 8px;
+    }
+    .mock-filter-pill.active {
+      background: var(--purple); color: #fff; border-color: var(--purple);
+    }
+
+    .mock-table-head {
+      display: grid;
+      grid-template-columns: 24px 1fr 90px 90px 60px 50px 50px 50px 30px;
+      padding: 6px 16px;
+      font-size: 9px; font-weight: 700;
+      color: var(--text2); letter-spacing: 0.06em; text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+    .mock-table-body { flex: 1; overflow: hidden; }
+    .mock-row {
+      display: grid;
+      grid-template-columns: 24px 1fr 90px 90px 60px 50px 50px 50px 30px;
+      padding: 7px 16px; align-items: center;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      font-size: 10px; color: var(--text2);
+      transition: background 0.15s;
+    }
+    .mock-row:hover { background: rgba(255,255,255,0.03); }
+    .mock-row.selected { background: rgba(124,58,237,0.1); }
+    .mock-track-icon {
+      width: 18px; height: 18px; border-radius: 4px;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 8px;
+    }
+    .mock-track-name { color: var(--text); font-weight: 500; font-size: 11px; }
+    .mock-dots { display: flex; gap: 2px; }
+    .mock-dot-small { width: 3px; height: 3px; border-radius: 50%; background: var(--text2); }
+
+    .mock-player {
+      background: #0d0f1c;
+      border-top: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex; align-items: center; gap: 12px;
+    }
+    .mock-player-icon {
+      width: 32px; height: 32px; border-radius: 6px;
+      background: var(--grad); flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px;
+    }
+    .mock-player-info { flex: 1; }
+    .mock-player-name { font-size: 11px; font-weight: 600; }
+    .mock-player-artist { font-size: 9px; color: var(--text2); }
+    .mock-waveform {
+      flex: 2;
+      height: 28px;
+      display: flex; align-items: center; gap: 1px;
+    }
+    .mock-waveform-bar {
+      width: 2px; border-radius: 1px;
+      background: var(--purple);
+      opacity: 0.6;
+    }
+    .mock-waveform-bar.played { background: var(--pink); opacity: 0.9; }
+    .mock-controls { display: flex; align-items: center; gap: 10px; color: var(--text2); }
+    .mock-play-btn {
+      width: 28px; height: 28px; border-radius: 50%;
+      background: var(--grad);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; color: #fff;
+    }
+
+    /* ── FEATURES ── */
+    .section {
+      max-width: 1100px; margin: 0 auto;
+      padding: 100px 40px;
+    }
+    .section-label {
+      text-align: center; font-size: 12px; font-weight: 700;
+      color: var(--purple); letter-spacing: 0.1em; text-transform: uppercase;
+      margin-bottom: 14px;
+    }
+    .section-title {
+      text-align: center; font-size: clamp(28px, 3.5vw, 42px);
+      font-weight: 800; line-height: 1.15; margin-bottom: 14px;
+      letter-spacing: -0.02em;
+    }
+    .section-sub {
+      text-align: center; font-size: 16px; color: var(--text2);
+      max-width: 520px; margin: 0 auto 64px; line-height: 1.65;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+    .feature-card:hover {
+      border-color: rgba(124,58,237,0.4);
+      transform: translateY(-3px);
+    }
+    .feature-icon {
+      width: 44px; height: 44px; border-radius: 11px;
+      background: rgba(124,58,237,0.15);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; margin-bottom: 18px;
+    }
+    .feature-title { font-size: 16px; font-weight: 700; margin-bottom: 8px; }
+    .feature-desc { font-size: 14px; color: var(--text2); line-height: 1.6; }
+
+    /* ── PRICING ── */
+    .pricing-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 24px;
+      max-width: 700px;
+      margin: 0 auto;
+    }
+    .pricing-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 32px;
+    }
+    .pricing-card.featured {
+      border-color: var(--purple);
+      background: linear-gradient(145deg, rgba(124,58,237,0.12), rgba(255,45,117,0.06));
+      position: relative; overflow: hidden;
+    }
+    .pricing-card.featured::before {
+      content: 'Most Popular';
+      position: absolute; top: 16px; right: -28px;
+      background: var(--grad); color: #fff;
+      font-size: 10px; font-weight: 700;
+      padding: 4px 36px;
+      transform: rotate(35deg);
+    }
+    .pricing-tier { font-size: 13px; font-weight: 600; color: var(--text2); margin-bottom: 12px; }
+    .pricing-price { font-size: 40px; font-weight: 900; letter-spacing: -0.03em; margin-bottom: 4px; }
+    .pricing-price span { font-size: 18px; font-weight: 600; vertical-align: super; }
+    .pricing-note { font-size: 12px; color: var(--text2); margin-bottom: 24px; }
+    .pricing-features { list-style: none; display: flex; flex-direction: column; gap: 10px; margin-bottom: 28px; }
+    .pricing-features li {
+      display: flex; align-items: center; gap: 9px;
+      font-size: 13px; color: var(--text2);
+    }
+    .pricing-features li::before {
+      content: '✓'; color: var(--purple); font-weight: 700; flex-shrink: 0;
+    }
+    .pricing-btn {
+      display: block; width: 100%; text-align: center;
+      padding: 12px; border-radius: 10px;
+      font-size: 14px; font-weight: 700;
+      text-decoration: none; cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+    }
+    .pricing-btn:hover { opacity: 0.88; transform: translateY(-1px); }
+    .pricing-btn-free {
+      border: 1px solid var(--border);
+      color: var(--text); background: transparent;
+    }
+    .pricing-btn-pro {
+      background: var(--grad); color: #fff;
+    }
+
+    /* ── DAWS ── */
+    .daws-section {
+      border-top: 1px solid var(--border);
+      padding: 48px 40px;
+      text-align: center;
+    }
+    .daws-label {
+      font-size: 12px; color: var(--text2); margin-bottom: 32px;
+      letter-spacing: 0.05em;
+    }
+    .daws-row {
+      display: flex; align-items: center; justify-content: center;
+      flex-wrap: wrap; gap: 48px;
+    }
+    .daw {
+      font-size: 14px; font-weight: 700; color: var(--text2);
+      opacity: 0.45; letter-spacing: 0.04em;
+      transition: opacity 0.2s;
+    }
+    .daw:hover { opacity: 0.75; }
+
+    /* ── FOOTER ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 40px;
+      display: flex; align-items: center; justify-content: space-between;
+      max-width: 1280px; margin: 0 auto;
+    }
+    .footer-logo {
+      display: flex; align-items: center; gap: 8px;
+      text-decoration: none; color: var(--text2);
+      font-size: 13px; font-weight: 600;
+    }
+    .footer-copy { font-size: 12px; color: var(--text2); }
+    .footer-links { display: flex; gap: 24px; }
+    .footer-links a { font-size: 12px; color: var(--text2); text-decoration: none; transition: color 0.2s; }
+    .footer-links a:hover { color: var(--text); }
+
+    @media (max-width: 900px) {
+      .hero { grid-template-columns: 1fr; padding: 100px 24px 60px; }
+      .hero-right { display: none; }
+      .features-grid { grid-template-columns: 1fr; }
+      .pricing-grid { grid-template-columns: 1fr; }
+      nav { padding: 0 20px; }
+      .nav-links { display: none; }
+      .section { padding: 70px 24px; }
+      footer { flex-direction: column; gap: 16px; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── NAV ── -->
+<nav>
+  <a class="nav-logo" href="#">
+    <div class="nav-logo-icon">T</div>
+    <span class="nav-logo-name">TrackTag</span>
+    <span class="nav-logo-badge">PRO</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="https://github.com/yf1511/tracktag/releases" target="_blank">Updates</a></li>
+  </ul>
+  <div class="nav-actions">
+    <a href="#pricing" class="btn-outline">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      Pro License
+    </a>
+    <a href="https://github.com/yf1511/tracktag/releases/latest" class="btn-primary" target="_blank">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 18c-4.418 0-8-3.582-8-8s3.582-8 8-8 8 3.582 8 8-3.582 8-8 8zm-1-13v5.586l-2.293-2.293-1.414 1.414L12 17.414l4.707-4.707-1.414-1.414L13 13.586V7h-2z"/></svg>
+      Download for macOS
+    </a>
+  </div>
+</nav>
+
+<!-- ── HERO ── -->
+<section style="background: var(--bg);">
+  <div class="hero">
+    <div class="hero-left">
+      <div class="hero-pill">
+        <span>✦</span> Built for music creators
+      </div>
+      <h1>
+        Organize. Tag.<br>
+        Find. <span class="grad-text">Your music.</span>
+      </h1>
+      <p class="hero-sub">
+        The ultimate music library manager for producers.
+        Smart tagging, powerful search and a workflow
+        that keeps you creative.
+      </p>
+      <div class="hero-ctas">
+        <a href="https://github.com/yf1511/tracktag/releases/latest" class="cta-big cta-download" target="_blank">
+          <div class="cta-label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+            Download for macOS
+          </div>
+          <small>macOS 12.0 or later</small>
+        </a>
+        <a href="#pricing" class="cta-big cta-license">
+          <div class="cta-label">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            Pro License
+          </div>
+          <small>One-time payment</small>
+        </a>
+      </div>
+      <div class="trust-badges">
+        <div class="badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="#7c3aed"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Free Download
+        </div>
+        <div class="badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="#7c3aed"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          One-time Payment
+        </div>
+        <div class="badge">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="#7c3aed"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Secure &amp; Private
+        </div>
+      </div>
+    </div>
+
+    <!-- APP MOCKUP -->
+    <div class="hero-right">
+      <div class="mockup-wrap">
+        <div class="mockup-bar">
+          <div class="dot dot-r"></div>
+          <div class="dot dot-y"></div>
+          <div class="dot dot-g"></div>
+        </div>
+        <div class="mockup-inner">
+          <!-- Sidebar -->
+          <div class="mock-sidebar">
+            <div class="mock-logo-row">
+              <div class="mock-logo-icon">T</div>
+              <span class="mock-logo-text">TrackTag</span>
+              <span class="mock-pro-badge">PRO</span>
+            </div>
+            <div class="mock-search">🔍 Search in your library…</div>
+            <div class="mock-add-btn">+ Add Files</div>
+            <div class="mock-section-label">Library</div>
+            <div class="mock-nav-item active">🎵 All Tracks <span class="mock-nav-count">1,250</span></div>
+            <div style="height:8px;"></div>
+            <div class="mock-section-label">Genres</div>
+            <div class="mock-genre-item">Hip Hop <span>320</span></div>
+            <div class="mock-genre-item">Trap <span>215</span></div>
+            <div class="mock-genre-item">R&amp;B <span>168</span></div>
+            <div class="mock-genre-item">Drill <span>142</span></div>
+            <div class="mock-genre-item">Ambient <span>98</span></div>
+            <div class="mock-pro-active">
+              <div class="mock-pro-dot">
+                <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="#22c55e"/></svg>
+                Pro Active
+              </div>
+              <div class="mock-pro-sub">You have full access to all features.</div>
+            </div>
+          </div>
+          <!-- Main -->
+          <div class="mock-main">
+            <div class="mock-topbar">
+              <div class="mock-title-row">
+                <span class="mock-title">All Tracks</span>
+                <span class="mock-count">1,250 files</span>
+              </div>
+              <div class="mock-filters">
+                <div class="mock-filter-pill active">All</div>
+                <div class="mock-filter-pill">Genre ▾</div>
+                <div class="mock-filter-pill">BPM ▾</div>
+                <div class="mock-filter-pill">Key ▾</div>
+              </div>
+            </div>
+            <div class="mock-table-head">
+              <span>#</span><span>Title</span><span>Artist</span><span>Album</span><span>Genre</span><span>BPM</span><span>Key</span><span>Year</span><span></span>
+            </div>
+            <div class="mock-table-body">
+              <div class="mock-row selected">
+                <span style="color:var(--text2);font-size:9px;">1</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Midnight Dreams</span></div>
+                <span>NovaWave</span><span>After Hours</span><span>R&amp;B</span><span>92</span><span>Amin</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+              <div class="mock-row">
+                <span style="color:var(--text2);font-size:9px;">2</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Echoes</span></div>
+                <span>Kydness</span><span>Echoes - Single</span><span>Trap</span><span>140</span><span>F#min</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+              <div class="mock-row">
+                <span style="color:var(--text2);font-size:9px;">3</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Infinity</span></div>
+                <span>Luna Ray</span><span>Infinity</span><span>Ambient</span><span>85</span><span>Dmaj</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+              <div class="mock-row">
+                <span style="color:var(--text2);font-size:9px;">4</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Pressure</span></div>
+                <span>OG Astro</span><span>Pressure</span><span>Hip Hop</span><span>78</span><span>Gmin</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+              <div class="mock-row">
+                <span style="color:var(--text2);font-size:9px;">5</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Fade Away</span></div>
+                <span>Vensy</span><span>Fade Away</span><span>Trap</span><span>101</span><span>Cmin</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+              <div class="mock-row">
+                <span style="color:var(--text2);font-size:9px;">6</span>
+                <div style="display:flex;align-items:center;gap:7px;"><div class="mock-track-icon">♪</div><span class="mock-track-name">Let Go</span></div>
+                <span>Cloudy</span><span>Let Go - Single</span><span>Trap</span><span>145</span><span>Dmin</span><span>2024</span>
+                <div class="mock-dots"><div class="mock-dot-small"></div><div class="mock-dot-small"></div><div class="mock-dot-small"></div></div>
+              </div>
+            </div>
+            <!-- Player -->
+            <div class="mock-player">
+              <div class="mock-player-icon">♪</div>
+              <div class="mock-player-info">
+                <div class="mock-player-name">Midnight Dreams</div>
+                <div class="mock-player-artist">NovaWave</div>
+              </div>
+              <div class="mock-waveform" id="waveform"></div>
+              <div class="mock-controls">
+                <span style="font-size:11px;">⏮</span>
+                <div class="mock-play-btn">▶</div>
+                <span style="font-size:11px;">⏭</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── DAWS ── -->
+<div class="daws-section">
+  <div class="daws-label">TRUSTED BY MUSIC CREATORS WORLDWIDE</div>
+  <div class="daws-row">
+    <div class="daw">FL STUDIO</div>
+    <div class="daw">ABLETON</div>
+    <div class="daw">SERATO</div>
+    <div class="daw">LOGIC PRO</div>
+    <div class="daw">MASCHINE</div>
+    <div class="daw">STUDIO ONE</div>
+  </div>
+</div>
+
+<!-- ── FEATURES ── -->
+<section class="section" id="features">
+  <div class="section-label">Features</div>
+  <h2 class="section-title">Everything your library needs</h2>
+  <p class="section-sub">Stop wasting time searching for tracks. TrackTag gives you a fast, clean workflow so you can focus on making music.</p>
+  <div class="features-grid">
+    <div class="feature-card">
+      <div class="feature-icon">🏷️</div>
+      <div class="feature-title">Bulk Tag Editing</div>
+      <div class="feature-desc">Edit title, artist, album, genre, BPM, key and more — across hundreds of files at once. No manual one-by-one.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🖼️</div>
+      <div class="feature-title">Cover Art Search</div>
+      <div class="feature-desc">Search and apply cover artwork from the internet. Smart Match finds the best result automatically.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🎛️</div>
+      <div class="feature-title">Genre Sidebar</div>
+      <div class="feature-desc">Organize your library by genre with one click. Add custom genres and filter your entire collection instantly.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">🔍</div>
+      <div class="feature-title">Powerful Search</div>
+      <div class="feature-desc">Search by any tag — title, artist, album, genre. Find any track in your library in milliseconds.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">👁️</div>
+      <div class="feature-title">Quick Look Preview</div>
+      <div class="feature-desc">Preview any track instantly with macOS Quick Look — without opening another app or interrupting your workflow.</div>
+    </div>
+    <div class="feature-card">
+      <div class="feature-icon">📦</div>
+      <div class="feature-title">All Major Formats</div>
+      <div class="feature-desc">MP3, FLAC, WAV, AIFF, M4A — TrackTag handles everything in your library without compromises.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── PRICING ── -->
+<section class="section" id="pricing" style="padding-top:0;">
+  <div class="section-label">Pricing</div>
+  <h2 class="section-title">Simple, one-time pricing</h2>
+  <p class="section-sub">No subscriptions. Pay once, use forever. Free updates included.</p>
+  <div class="pricing-grid">
+    <div class="pricing-card">
+      <div class="pricing-tier">Free</div>
+      <div class="pricing-price"><span>$</span>0</div>
+      <div class="pricing-note">Always free</div>
+      <ul class="pricing-features">
+        <li>Bulk tag editing</li>
+        <li>All audio formats</li>
+        <li>Quick Look preview</li>
+        <li>Basic search</li>
+      </ul>
+      <a href="https://github.com/yf1511/tracktag/releases/latest" class="pricing-btn pricing-btn-free" target="_blank">Download Free</a>
+    </div>
+    <div class="pricing-card featured">
+      <div class="pricing-tier">Pro</div>
+      <div class="pricing-price"><span>$</span>14</div>
+      <div class="pricing-note">One-time payment</div>
+      <ul class="pricing-features">
+        <li>Everything in Free</li>
+        <li>Cover art search</li>
+        <li>Genre sidebar</li>
+        <li>Smart Match</li>
+        <li>Priority support</li>
+        <li>All future updates</li>
+      </ul>
+      <a href="#" class="pricing-btn pricing-btn-pro">Get Pro License →</a>
+    </div>
+  </div>
+</section>
+
+<!-- ── FOOTER ── -->
+<footer>
+  <a class="footer-logo" href="#">
+    <div class="nav-logo-icon" style="width:28px;height:28px;font-size:13px;">T</div>
+    TrackTag
+  </a>
+  <div class="footer-copy">© 2025 TrackTag. All rights reserved.</div>
+  <div class="footer-links">
+    <a href="https://github.com/yf1511/tracktag" target="_blank">GitHub</a>
+    <a href="https://github.com/yf1511/tracktag/releases" target="_blank">Changelog</a>
+  </div>
+</footer>
+
+<script>
+  // Generate waveform bars
+  const wf = document.getElementById('waveform');
+  const heights = [4,6,10,14,18,22,20,16,12,18,24,20,14,10,16,20,24,18,12,8,14,20,16,10,6,12,18,22,16,10,8,14,20,18,12];
+  heights.forEach((h, i) => {
+    const bar = document.createElement('div');
+    bar.className = 'mock-waveform-bar' + (i < 12 ? ' played' : '');
+    bar.style.height = h + 'px';
+    wf.appendChild(bar);
+  });
+
+  // Smooth scroll
+  document.querySelectorAll('a[href^="#"]').forEach(a => {
+    a.addEventListener('click', e => {
+      const target = document.querySelector(a.getAttribute('href'));
+      if (target) { e.preventDefault(); target.scrollIntoView({ behavior: 'smooth' }); }
+    });
+  });
+</script>
+</body>
+</html>
