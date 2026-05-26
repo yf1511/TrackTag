@@ -35,12 +35,12 @@
     /* ── NAV ── */
     .nav-outer {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      padding: 12px 24px;
+      padding: 12px 40px;
       pointer-events: none;
     }
     nav {
       pointer-events: all;
-      max-width: 1100px;
+      max-width: 1280px;
       margin: 0 auto;
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 20px;
@@ -530,8 +530,10 @@
       .hero-right { display: none; }
       .features-grid { grid-template-columns: 1fr; }
       .pricing-grid { grid-template-columns: 1fr; }
-      nav { padding: 0 20px; }
+      .nav-outer { padding: 12px 16px; }
+      nav { padding: 0 16px; }
       .nav-links { display: none; }
+      .btn-primary { display: none; }
       .section { padding: 70px 24px; }
       footer { flex-direction: column; gap: 16px; text-align: center; }
     }
