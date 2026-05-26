@@ -197,15 +197,37 @@
     /* ── APP MOCKUP ── */
     .hero-right { position: relative; z-index: 1; }
 
+    .mockup-outer {
+      position: relative;
+      padding: 2px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(124,58,237,0.5), rgba(255,45,117,0.2), rgba(124,58,237,0.1));
+      box-shadow:
+        0 0 80px rgba(124,58,237,0.25),
+        0 0 160px rgba(124,58,237,0.1),
+        0 60px 140px rgba(0,0,0,0.8);
+    }
+    .mockup-outer::before {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: 19px;
+      background: linear-gradient(135deg, rgba(124,58,237,0.4), transparent 60%);
+      pointer-events: none;
+    }
     .mockup-wrap {
       border-radius: 16px;
-      border: 1px solid rgba(124,58,237,0.35);
-      background: #0b0d17;
-      box-shadow:
-        0 0 0 1px rgba(255,255,255,0.04),
-        0 40px 120px rgba(0,0,0,0.7),
-        0 0 80px rgba(124,58,237,0.12);
+      background: #0a0c16;
       overflow: hidden;
+      position: relative;
+    }
+    .mockup-wrap::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+      pointer-events: none;
     }
     .mockup-bar {
       height: 36px;
@@ -571,20 +593,18 @@
     <div class="hero-left">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:28px;">
         <div class="hero-pill" style="margin-bottom:0;">
-          <span>✦</span> Built for music creators
+          <span>✦</span> Built for modern DJs &amp; Producers
         </div>
         <div class="hero-pill" style="margin-bottom:0;border-color:rgba(124,58,237,0.4);background:rgba(124,58,237,0.08);">
           <span style="color:var(--purple);">●</span> <span style="color:var(--text);">v1.0.3</span>
         </div>
       </div>
       <h1>
-        Organize. Tag.<br>
-        Find. <span class="grad-text">Your music.</span>
+        Stop searching.<br>
+        Start <span class="grad-text">creating.</span>
       </h1>
       <p class="hero-sub">
-        The ultimate music library manager for producers.
-        Smart tagging, powerful search and a workflow
-        that keeps you creative.
+        Your music library, finally under control. TrackTag gives you the speed and clarity to find any track in seconds — so you stay in the zone, not in the folders.
       </p>
       <div class="hero-ctas">
         <a href="https://github.com/yf1511/tracktag/releases/latest" class="cta-big cta-download" target="_blank">
@@ -599,7 +619,7 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
             Pro License
           </div>
-          <small>One-time payment</small>
+          <small>€29 · Lifetime</small>
         </a>
       </div>
       <div class="trust-badges">
@@ -609,7 +629,7 @@
         </div>
         <div class="badge">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="#7c3aed"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          One-time Payment
+          €29 Lifetime
         </div>
         <div class="badge">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" color="#7c3aed"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
@@ -620,6 +640,7 @@
 
     <!-- APP MOCKUP -->
     <div class="hero-right">
+      <div class="mockup-outer">
       <div class="mockup-wrap">
         <div class="mockup-bar">
           <div class="dot dot-r"></div>
@@ -725,6 +746,7 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
   </div>
 </section>
@@ -789,8 +811,8 @@
     </div>
     <div class="pricing-card featured">
       <div class="pricing-tier">Pro</div>
-      <div class="pricing-price"><span>$</span>14</div>
-      <div class="pricing-note">One-time payment</div>
+      <div class="pricing-price"><span>€</span>29</div>
+      <div class="pricing-note">One-time · Lifetime license</div>
       <ul class="pricing-features">
         <li>Everything in Free</li>
         <li>Cover art search</li>
