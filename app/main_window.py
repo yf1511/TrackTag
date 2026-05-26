@@ -875,7 +875,7 @@ class NavSidebar(QWidget):
         self._beta_lbl.setContentsMargins(6,0,6,0)
         self._beta_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._beta_lbl.setStyleSheet(
-            f"background:{C_ACCENT2};color:#fff;font-size:8px;font-weight:800;"
+            f"background:#0ea5e9;color:#fff;font-size:8px;font-weight:800;"
             f"border-radius:4px;border:none;letter-spacing:0.8px;")
         hl.addWidget(self._beta_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addStretch()
@@ -1163,7 +1163,7 @@ class NavSidebar(QWidget):
         if self._beta_lbl:
             self._beta_lbl.setText("BETA")
             self._beta_lbl.setStyleSheet(
-                f"background:{C_ACCENT2};color:#fff;font-size:8px;font-weight:800;"
+                f"background:#0ea5e9;color:#fff;font-size:8px;font-weight:800;"
                 f"border-radius:4px;border:none;letter-spacing:0.8px;")
         if hasattr(self, '_act_btn_ref'):
             self._act_btn_ref.setText("  Activate License")
