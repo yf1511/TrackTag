@@ -128,7 +128,7 @@ class UpdateChecker:
     """
 
     GITHUB_OWNER = "yf1511"
-    GITHUB_REPO  = "tracktag"
+    GITHUB_REPO  = "TrackTag"
 
     def __init__(self, parent_window):
         self._win    = parent_window
