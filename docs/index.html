@@ -43,7 +43,7 @@
       max-width: 1200px;
       margin: 0 auto;
       display: flex; align-items: center; justify-content: space-between;
-      padding: 4px 4px 4px 4px;
+      padding: 0 8px 0 4px;
       height: 52px;
       background: rgba(14,16,26,0.75);
       backdrop-filter: blur(20px) saturate(180%);
@@ -570,17 +570,47 @@
     .footer-links a { font-size: 12px; color: var(--text2); text-decoration: none; transition: color 0.2s; }
     .footer-links a:hover { color: var(--text); }
 
+    /* Scroll animations */
+    .reveal {
+      opacity: 0;
+      transform: translateY(32px);
+      transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1);
+    }
+    .reveal.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    .reveal-delay-1 { transition-delay: 0.1s; }
+    .reveal-delay-2 { transition-delay: 0.2s; }
+    .reveal-delay-3 { transition-delay: 0.3s; }
+    .reveal-delay-4 { transition-delay: 0.4s; }
+    .reveal-delay-5 { transition-delay: 0.5s; }
+
+    /* Parallax mockup */
+    .hero-right { transition: transform 0.1s linear; will-change: transform; }
+
+    @media (max-width: 1100px) {
+      .nav-outer { padding: 12px 24px; }
+    }
     @media (max-width: 900px) {
-      .hero { grid-template-columns: 1fr; padding: 100px 24px 60px; }
+      .hero { grid-template-columns: 1fr; padding: 120px 20px 80px; }
       .hero-right { display: none; }
       .features-grid { grid-template-columns: 1fr; }
       .pricing-grid { grid-template-columns: 1fr; }
-      .nav-outer { padding: 12px 16px; }
-      nav { padding: 0 16px; }
+      .nav-outer { padding: 10px 16px; }
+      nav { padding: 0 6px 0 4px; height: 48px; border-radius: 14px; }
+      .nav-logo-icon { width: 38px; height: 38px; }
       .nav-links { display: none; }
       .btn-primary { display: none; }
-      .section { padding: 70px 24px; }
-      footer { flex-direction: column; gap: 16px; text-align: center; }
+      .section { padding: 70px 20px; }
+      footer { flex-direction: column; gap: 16px; text-align: center; padding: 32px 20px; }
+    }
+    @media (max-width: 480px) {
+      .nav-outer { padding: 8px 12px; }
+      nav { height: 46px; border-radius: 12px; }
+      .nav-logo-name { font-size: 15px; }
+      .nav-logo-badge { display: none; }
+      h1 { font-size: 34px; }
     }
   </style>
 </head>
@@ -631,7 +661,7 @@
   "></div>
 
   <div class="hero" style="position:relative;z-index:1;">
-    <div class="hero-left">
+    <div class="hero-left reveal visible">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:28px;">
         <div class="hero-pill" style="margin-bottom:0;">
           <span>✦</span> Built for modern DJs &amp; Producers
@@ -680,7 +710,7 @@
     </div>
 
     <!-- APP MOCKUP -->
-    <div class="hero-right">
+    <div class="hero-right reveal visible reveal-delay-2">
       <div class="mockup-outer">
       <div class="mockup-wrap">
         <div class="mockup-bar">
@@ -795,36 +825,36 @@
 
 <!-- ── FEATURES ── -->
 <section class="section" id="features">
-  <div class="section-label">Features</div>
-  <h2 class="section-title">Everything your library needs</h2>
-  <p class="section-sub">Stop wasting time searching for tracks. TrackTag gives you a fast, clean workflow so you can focus on making music.</p>
+  <div class="section-label reveal">Features</div>
+  <h2 class="section-title reveal reveal-delay-1">Everything your library needs</h2>
+  <p class="section-sub reveal reveal-delay-2">Stop wasting time searching for tracks. TrackTag gives you a fast, clean workflow so you can focus on making music.</p>
   <div class="features-grid">
-    <div class="feature-card">
+    <div class="feature-card reveal">
       <div class="feature-icon">🏷️</div>
       <div class="feature-title">Bulk Tag Editing</div>
       <div class="feature-desc">Edit title, artist, album, genre, BPM, key and more — across hundreds of files at once. No manual one-by-one.</div>
     </div>
-    <div class="feature-card">
+    <div class="feature-card reveal reveal-delay-1">
       <div class="feature-icon">🖼️</div>
       <div class="feature-title">Cover Art Search</div>
       <div class="feature-desc">Search and apply cover artwork from the internet. Smart Match finds the best result automatically.</div>
     </div>
-    <div class="feature-card">
+    <div class="feature-card reveal reveal-delay-2">
       <div class="feature-icon">🎛️</div>
       <div class="feature-title">Genre Sidebar</div>
       <div class="feature-desc">Organize your library by genre with one click. Add custom genres and filter your entire collection instantly.</div>
     </div>
-    <div class="feature-card">
+    <div class="feature-card reveal reveal-delay-3">
       <div class="feature-icon">🔍</div>
       <div class="feature-title">Powerful Search</div>
       <div class="feature-desc">Search by any tag — title, artist, album, genre. Find any track in your library in milliseconds.</div>
     </div>
-    <div class="feature-card">
+    <div class="feature-card reveal reveal-delay-4">
       <div class="feature-icon">👁️</div>
       <div class="feature-title">Quick Look Preview</div>
       <div class="feature-desc">Preview any track instantly with macOS Quick Look — without opening another app or interrupting your workflow.</div>
     </div>
-    <div class="feature-card">
+    <div class="feature-card reveal reveal-delay-5">
       <div class="feature-icon">📦</div>
       <div class="feature-title">All Major Formats</div>
       <div class="feature-desc">MP3, FLAC, WAV, AIFF, M4A — TrackTag handles everything in your library without compromises.</div>
@@ -834,9 +864,9 @@
 
 <!-- ── PRICING ── -->
 <section class="section" id="pricing" style="padding-top:0;">
-  <div class="section-label">Pricing</div>
-  <h2 class="section-title">Simple, one-time pricing</h2>
-  <p class="section-sub">No subscriptions. Pay once, use forever. Free updates included.</p>
+  <div class="section-label reveal">Pricing</div>
+  <h2 class="section-title reveal reveal-delay-1">Simple, one-time pricing</h2>
+  <p class="section-sub reveal reveal-delay-2">No subscriptions. Pay once, use forever. Free updates included.</p>
   <div class="pricing-grid">
     <div class="pricing-card">
       <div class="pricing-tier">Free</div>
@@ -881,7 +911,7 @@
 </footer>
 
 <script>
-  // Generate waveform bars
+  // Waveform bars
   const wf = document.getElementById('waveform');
   const heights = [4,6,10,14,18,22,20,16,12,18,24,20,14,10,16,20,24,18,12,8,14,20,16,10,6,12,18,22,16,10,8,14,20,18,12];
   heights.forEach((h, i) => {
@@ -898,6 +928,36 @@
       if (target) { e.preventDefault(); target.scrollIntoView({ behavior: 'smooth' }); }
     });
   });
+
+  // Scroll reveal (IntersectionObserver)
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  document.querySelectorAll('.reveal:not(.visible)').forEach(el => observer.observe(el));
+
+  // Parallax on mockup
+  const mockup = document.querySelector('.hero-right');
+  if (mockup && window.innerWidth > 900) {
+    window.addEventListener('scroll', () => {
+      const y = window.scrollY;
+      mockup.style.transform = `translateY(${y * 0.06}px)`;
+    }, { passive: true });
+  }
+
+  // Subtle parallax on hero text
+  const heroLeft = document.querySelector('.hero-left');
+  if (heroLeft && window.innerWidth > 900) {
+    window.addEventListener('scroll', () => {
+      const y = window.scrollY;
+      heroLeft.style.transform = `translateY(${y * 0.03}px)`;
+    }, { passive: true });
+  }
 </script>
 </body>
 </html>
