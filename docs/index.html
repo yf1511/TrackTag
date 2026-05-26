@@ -111,28 +111,29 @@
       position: relative;
     }
 
-    /* Animated glow orbs */
+    /* Animated glow orbs — fixed, full page */
     .glow-orb {
-      position: absolute; border-radius: 50%;
-      filter: blur(80px); opacity: 0.5;
+      position: fixed; border-radius: 50%;
+      filter: blur(100px); opacity: 0.45;
+      pointer-events: none; z-index: 0;
     }
     .glow-orb-1 {
-      width: 600px; height: 600px;
-      background: radial-gradient(circle, rgba(124,58,237,0.35), transparent 70%);
-      top: -150px; left: -100px;
-      animation: orbFloat1 12s ease-in-out infinite;
+      width: 700px; height: 700px;
+      background: radial-gradient(circle, rgba(124,58,237,0.4), transparent 70%);
+      top: -200px; left: -150px;
+      animation: orbFloat1 14s ease-in-out infinite;
     }
     .glow-orb-2 {
-      width: 500px; height: 500px;
-      background: radial-gradient(circle, rgba(255,45,117,0.2), transparent 70%);
-      bottom: -100px; right: 10%;
-      animation: orbFloat2 15s ease-in-out infinite;
+      width: 550px; height: 550px;
+      background: radial-gradient(circle, rgba(255,45,117,0.22), transparent 70%);
+      top: 30vh; right: -100px;
+      animation: orbFloat2 18s ease-in-out infinite;
     }
     .glow-orb-3 {
-      width: 350px; height: 350px;
-      background: radial-gradient(circle, rgba(124,58,237,0.15), transparent 70%);
-      top: 40%; right: 30%;
-      animation: orbFloat3 18s ease-in-out infinite;
+      width: 400px; height: 400px;
+      background: radial-gradient(circle, rgba(124,58,237,0.18), transparent 70%);
+      bottom: 10vh; left: 20%;
+      animation: orbFloat3 22s ease-in-out infinite;
     }
     @keyframes orbFloat1 {
       0%, 100% { transform: translate(0, 0) scale(1); }
@@ -455,7 +456,8 @@
       gap: 20px;
     }
     .feature-card {
-      background: var(--surface);
+      background: rgba(14,16,26,0.6);
+      backdrop-filter: blur(12px);
       border: 1px solid var(--border);
       border-radius: 16px;
       padding: 28px;
@@ -483,7 +485,8 @@
       margin: 0 auto;
     }
     .pricing-card {
-      background: var(--surface);
+      background: rgba(14,16,26,0.6);
+      backdrop-filter: blur(12px);
       border: 1px solid var(--border);
       border-radius: 20px;
       padding: 32px;
@@ -584,6 +587,11 @@
 <body>
 
 <!-- ── NAV ── -->
+<!-- Global glow orbs -->
+<div class="glow-orb glow-orb-1"></div>
+<div class="glow-orb glow-orb-2"></div>
+<div class="glow-orb glow-orb-3"></div>
+
 <div class="nav-outer">
 <nav>
   <a class="nav-logo" href="#">
@@ -610,24 +618,17 @@
 </div>
 
 <!-- ── HERO ── -->
-<section style="background: var(--bg); position:relative; overflow:hidden;">
+<section style="background: transparent; position:relative;">
 
-  <!-- Dot grid -->
+  <!-- Dot grid — full page, fades bottom -->
   <div style="
-    position:absolute; inset:0; z-index:0;
-    background-image: radial-gradient(circle, rgba(255,255,255,0.07) 1px, transparent 1px);
+    position:fixed; inset:0; z-index:0;
+    background-image: radial-gradient(circle, rgba(255,255,255,0.065) 1px, transparent 1px);
     background-size: 28px 28px;
-    mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 75%);
-    -webkit-mask-image: radial-gradient(ellipse 80% 60% at 60% 40%, black 20%, transparent 75%);
+    mask-image: radial-gradient(ellipse 100% 55% at 50% 0%, black 0%, transparent 100%);
+    -webkit-mask-image: radial-gradient(ellipse 100% 55% at 50% 0%, black 0%, transparent 100%);
     pointer-events:none;
   "></div>
-
-  <!-- Animated glow orbs -->
-  <div style="position:absolute;inset:0;z-index:0;pointer-events:none;overflow:hidden;">
-    <div class="glow-orb glow-orb-1"></div>
-    <div class="glow-orb glow-orb-2"></div>
-    <div class="glow-orb glow-orb-3"></div>
-  </div>
 
   <div class="hero" style="position:relative;z-index:1;">
     <div class="hero-left">
