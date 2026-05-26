@@ -33,6 +33,11 @@ from .cover_search import MetaSearchDialog
 from .updater import UpdateChecker
 from . import license as _lic
 
+try:
+    from version import __version__ as _APP_VERSION
+except Exception:
+    _APP_VERSION = "1.0.4"
+
 
 def _ico(name: str, color: str = "#a1a5b3", size: int = 16) -> QIcon:
     """Return a qtawesome icon with given color."""
@@ -881,13 +886,13 @@ class NavSidebar(QWidget):
             f"background:transparent;border:none;")
         hl.addWidget(nl)
 
-        self._beta_lbl = QLabel("BETA")
+        self._beta_lbl = QLabel(f"v{_APP_VERSION}")
         self._beta_lbl.setFixedHeight(18)
         self._beta_lbl.setContentsMargins(6,0,6,0)
         self._beta_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._beta_lbl.setStyleSheet(
-            f"background:#0ea5e9;color:#fff;font-size:8px;font-weight:800;"
-            f"border-radius:4px;border:none;letter-spacing:0.8px;")
+            f"background:{C_SURFACE2};color:{C_TEXT2};font-size:8px;font-weight:800;"
+            f"border-radius:4px;border:1px solid {C_BORDER};letter-spacing:0.8px;")
         hl.addWidget(self._beta_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addStretch()
         root.addWidget(hdr)
@@ -933,19 +938,9 @@ class NavSidebar(QWidget):
         cl.addWidget(add)
         cl.addSpacing(20)
 
-        # ── Library section label ─────────────────────────────────────────
-        nav_lbl = QLabel("LIBRARY")
-        nav_lbl.setStyleSheet(
-            f"color:{C_TEXT3};font-size:9px;font-weight:700;"
-            f"letter-spacing:1.4px;background:transparent;border:none;")
-        cl.addWidget(nav_lbl)
-        cl.addSpacing(6)
-
-        # Nav items
+        # Nav items (All Tracks kept for reference but not added to layout)
         self._nav_all = NavItem("All Tracks", "fa5s.music", "0", active=True)
         self._nav_all.clicked.connect(lambda: self._select("all", ""))
-        cl.addWidget(self._nav_all)
-        cl.addSpacing(16)
 
         # ── Genres section ────────────────────────────────────────────────
         genres_hdr_row = QHBoxLayout()
@@ -1021,13 +1016,13 @@ class NavSidebar(QWidget):
         ct1.setStyleSheet(f"color:{C_TEXT};font-size:12px;font-weight:700;")
         ct2 = QLabel("Unlock all powerful features")
         ct2.setStyleSheet(f"color:{C_TEXT2};font-size:10px;")
-        upbtn = QPushButton("Get Pro  →"); upbtn.setFixedHeight(26)
+        upbtn = QPushButton("Get Pro  →"); upbtn.setFixedHeight(40)
         upbtn.setStyleSheet(f"""
             QPushButton{{
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
                     stop:0 {C_PRIMARY},stop:1 {C_ACCENT});
-                color:#fff;border:none;border-radius:7px;
-                font-size:11px;font-weight:700;
+                color:#fff;border:none;border-radius:10px;
+                font-size:13px;font-weight:700;
             }}
             QPushButton:hover{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
                 stop:0 #8b46ff,stop:1 #ff4d88);}}
@@ -1037,7 +1032,7 @@ class NavSidebar(QWidget):
         root.addWidget(content, 1)
 
     def _select(self, mode: str, value: str = ""):
-        self._nav_all.set_active(mode == "all")
+        if self._nav_all: self._nav_all.set_active(mode == "all")
         for g, nav in self._genre_navs.items():
             nav.set_active(mode == "genre" and g == value)
         self.nav_filter_changed.emit(mode, value)
@@ -1060,7 +1055,7 @@ class NavSidebar(QWidget):
             # If currently selected, switch to all
             self.nav_filter_changed.emit("all", "")
             self._rebuild_genre_navs()
-            self._nav_all.set_active(True)
+            if self._nav_all: self._nav_all.set_active(True)
 
     def _rebuild_genre_navs(self):
         # Clear old items
@@ -1082,6 +1077,21 @@ class NavSidebar(QWidget):
 
             self._genre_navs[genre] = nav
             self._genre_vbox.addWidget(nav)
+
+    def _sync_genres_from_files(self, audio_files):
+        """Auto-add genres found in loaded files to the sidebar."""
+        seen = set()
+        for af in audio_files:
+            g = (getattr(af, 'genre', '') or '').strip()
+            if g:
+                seen.add(g)
+            else:
+                seen.add('No Genre')
+        for g in seen:
+            if g not in self._genres:
+                self._genres.append(g)
+        self._save_genres()
+        self._rebuild_genre_navs()
 
     def _genre_context_menu(self, genre: str, nav: "NavItem", pos):
         menu = QMenu(self)
@@ -1178,10 +1188,10 @@ class NavSidebar(QWidget):
         global _is_pro
         _is_pro = False
         if self._beta_lbl:
-            self._beta_lbl.setText("BETA")
+            self._beta_lbl.setText(f"v{_APP_VERSION}")
             self._beta_lbl.setStyleSheet(
-                f"background:#0ea5e9;color:#fff;font-size:8px;font-weight:800;"
-                f"border-radius:4px;border:none;letter-spacing:0.8px;")
+                f"background:{C_SURFACE2};color:{C_TEXT2};font-size:8px;font-weight:800;"
+                f"border-radius:4px;border:1px solid {C_BORDER};letter-spacing:0.8px;")
         if hasattr(self, '_act_btn_ref'):
             self._act_btn_ref.setText("  Activate License")
             self._act_btn_ref.setEnabled(True)
@@ -1267,9 +1277,9 @@ class TagPanel(QWidget):
                          f"QPushButton:disabled{{color:{C_TEXT3};border-color:{C_SURFACE};}}")
 
         row1 = QHBoxLayout(); row1.setSpacing(7)
-        bt = QPushButton("🔍 Search Tags"); bt.setFixedHeight(34)
+        bt = QPushButton("Search Tags"); bt.setFixedHeight(34)
         bt.setStyleSheet(btn_ss_active); bt.clicked.connect(lambda: self._search("tags_only"))
-        bc = QPushButton("🖼 Cover Only");  bc.setFixedHeight(34)
+        bc = QPushButton("Cover Only");  bc.setFixedHeight(34)
         bc.setStyleSheet(btn_ss_active); bc.clicked.connect(lambda: self._search("cover_only"))
         row1.addWidget(bt,1); row1.addWidget(bc,1)
         csv.addLayout(row1)
@@ -1600,10 +1610,10 @@ class TagPanel(QWidget):
                             f"QMenu::item{{padding:7px 16px;border-radius:6px;font-size:12px;}}"
                             f"QMenu::item:selected{{background:{C_PRIMARY};}}"
                             f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
-        menu.addAction("📂  Cover aus Datei…").triggered.connect(self._pick_cover)
-        menu.addAction("📋  Paste Cover (⌘V)").triggered.connect(self._paste)
+        menu.addAction("  Cover from File…").triggered.connect(self._pick_cover)
+        menu.addAction("  Paste Cover  ⌘V").triggered.connect(self._paste)
         menu.addSeparator()
-        menu.addAction("🗑  Remove Cover").triggered.connect(self._del_cover)
+        menu.addAction("  Remove Cover").triggered.connect(self._del_cover)
         menu.exec(self.save_btn.mapToGlobal(self.save_btn.rect().topRight()))
 
     def _rename(self):
@@ -2113,7 +2123,7 @@ class SettingsDialog(QDialog):
         app_name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         app_name.setStyleSheet(f"color:{C_TEXT};font-size:20px;font-weight:800;")
         v.addWidget(app_name)
-        version = QLabel("Version 1.0 Beta")
+        version = QLabel(f"Version {_APP_VERSION}")
         version.setAlignment(Qt.AlignmentFlag.AlignCenter)
         version.setStyleSheet(f"color:{C_TEXT3};font-size:11px;")
         v.addWidget(version)
@@ -2236,10 +2246,10 @@ class MainWindow(QMainWindow):
         tbl.addWidget(srch_ic)
 
         self.search_field = QLineEdit()
-        self.search_field.setPlaceholderText("Search in your library…")
+        self.search_field.setPlaceholderText("Search")
         self.search_field.setFixedHeight(36)
         self.search_field.setStyleSheet(f"""
-            QLineEdit{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid {C_BORDER};
+            QLineEdit{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid transparent;
                        border-radius:18px;padding:0 16px;font-size:13px;}}
             QLineEdit:focus{{border-color:{C_PRIMARY};}}
         """)
@@ -2627,6 +2637,7 @@ class MainWindow(QMainWindow):
         for p in new:
             try: self.audio_files.append(AudioFile(p))
             except Exception as e: print(f"Error loading {p}: {e}")
+        self.nav._sync_genres_from_files(self.audio_files)
         self._rebuild_table()
 
     def _rebuild_table(self):
@@ -2728,21 +2739,21 @@ class MainWindow(QMainWindow):
                             f"QMenu::item{{padding:7px 16px;border-radius:6px;font-size:12px;}}"
                             f"QMenu::item:selected{{background:{C_PRIMARY};}}"
                             f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
-        menu.addAction(f"▶  Quick Look (Space)").triggered.connect(
+        menu.addAction(f"  Quick Look  Space").triggered.connect(
             lambda: _quick_look(sel[0].path) if sel else None)
-        menu.addAction(f"💾  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
+        menu.addAction(f"  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
         menu.addSeparator()
-        act_tags = menu.addAction("🔍  Search Tags…")
+        act_tags = menu.addAction("  Search Tags…")
         act_tags.triggered.connect(lambda: self.tag_panel._search("tags_only"))
-        act_cover = menu.addAction("🖼  Cover Only…")
+        act_cover = menu.addAction("  Cover Only…")
         act_cover.triggered.connect(lambda: self.tag_panel._search("cover_only"))
         if not _is_pro:
-            act_tags.setText("🔍  Search Tags…  ✦ Pro")
-            act_cover.setText("🖼  Cover Only…  ✦ Pro")
+            act_tags.setText("  Search Tags  [Pro]")
+            act_cover.setText("  Cover Only  [Pro]")
         menu.addSeparator()
-        menu.addAction("✏️  Rename").triggered.connect(self.tag_panel._rename)
+        menu.addAction("  Rename").triggered.connect(self.tag_panel._rename)
         menu.addSeparator()
-        menu.addAction("✕  Remove from List").triggered.connect(self._remove_sel)
+        menu.addAction("  Remove from List").triggered.connect(self._remove_sel)
         menu.exec(self.table.mapToGlobal(pos))
 
     # ── Drag & drop ───────────────────────────────────────────────────────────
