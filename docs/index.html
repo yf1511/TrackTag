@@ -33,14 +33,24 @@
     }
 
     /* ── NAV ── */
-    nav {
+    .nav-outer {
       position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      padding: 12px 24px;
+      pointer-events: none;
+    }
+    nav {
+      pointer-events: all;
+      max-width: 1100px;
+      margin: 0 auto;
       display: flex; align-items: center; justify-content: space-between;
-      padding: 0 40px;
-      height: 64px;
-      background: rgba(6,7,13,0.85);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 52px;
+      background: rgba(14,16,26,0.75);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 1px 0 rgba(255,255,255,0.04) inset;
     }
     .nav-logo {
       display: flex; align-items: center; gap: 10px;
@@ -93,7 +103,7 @@
     /* ── HERO ── */
     .hero {
       min-height: 100vh;
-      padding: 120px 40px 80px;
+      padding: 110px 40px 80px;
       display: grid;
       grid-template-columns: 1fr 1.15fr;
       align-items: center;
@@ -530,6 +540,7 @@
 <body>
 
 <!-- ── NAV ── -->
+<div class="nav-outer">
 <nav>
   <a class="nav-logo" href="#">
     <div class="nav-logo-icon"><img src="icon.png" alt="TrackTag" /></div>
@@ -552,6 +563,7 @@
     </a>
   </div>
 </nav>
+</div>
 
 <!-- ── HERO ── -->
 <section style="background: var(--bg);">
