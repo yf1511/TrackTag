@@ -1167,6 +1167,11 @@ class NavSidebar(QWidget):
                 f"border-radius:8px;font-size:10px;font-weight:600;"
                 f"text-align:left;padding-left:10px;}}"
                 f"QPushButton:hover{{background:rgba(34,197,94,0.22);}}")
+        # Unlock search buttons
+        for btn in (getattr(self, '_btn_search_tags', None),
+                    getattr(self, '_btn_search_cover', None)):
+            if btn:
+                btn.setToolTip("")
         self.pro_activated.emit()
 
     def _on_pro_deactivated(self):
@@ -1262,12 +1267,17 @@ class TagPanel(QWidget):
                          f"QPushButton:disabled{{color:{C_TEXT3};border-color:{C_SURFACE};}}")
 
         row1 = QHBoxLayout(); row1.setSpacing(7)
-        bt = QPushButton("Search Tags"); bt.setFixedHeight(34)
+        bt = QPushButton("🔍 Search Tags"); bt.setFixedHeight(34)
         bt.setStyleSheet(btn_ss_active); bt.clicked.connect(lambda: self._search("tags_only"))
-        bc = QPushButton("Cover Only");  bc.setFixedHeight(34)
+        bc = QPushButton("🖼 Cover Only");  bc.setFixedHeight(34)
         bc.setStyleSheet(btn_ss_active); bc.clicked.connect(lambda: self._search("cover_only"))
         row1.addWidget(bt,1); row1.addWidget(bc,1)
         csv.addLayout(row1)
+        self._btn_search_tags = bt
+        self._btn_search_cover = bc
+        if not _is_pro:
+            bt.setToolTip("✦ Pro feature — upgrade to use")
+            bc.setToolTip("✦ Pro feature — upgrade to use")
 
         bp = QPushButton("Paste  (⌘V)"); bp.setFixedHeight(34)
         bp.setStyleSheet(btn_ss_active); bp.clicked.connect(self._paste)
@@ -1546,11 +1556,28 @@ class TagPanel(QWidget):
         self.cover.clear_cover(); self.tags_changed.emit()
 
     def _search(self, preset="all"):
+        if not _is_pro:
+            self._show_pro_prompt()
+            return
         if not self._files: return
         f=self._files[0]
         dlg=MetaSearchDialog(artist=f.artist,title=f.title,album=f.album,
                               preset=preset,parent=self)
         dlg.result_selected.connect(self._apply); dlg.exec()
+
+    def _show_pro_prompt(self):
+        from PyQt6.QtWidgets import QMessageBox
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Pro Feature")
+        msg.setText("✦  This feature requires TrackTag Pro.")
+        msg.setInformativeText("Upgrade to Pro to unlock automatic tag & cover search.")
+        msg.setStandardButtons(QMessageBox.StandardButton.Cancel)
+        upgrade = msg.addButton("Upgrade to Pro →", QMessageBox.ButtonRole.AcceptRole)
+        msg.setDefaultButton(upgrade)
+        msg.exec()
+        if msg.clickedButton() == upgrade:
+            import subprocess
+            subprocess.Popen(["open", "https://yf1511.github.io/tracktag/#pricing"])
 
     def _apply(self, payload: dict):
         if not self._files: return
@@ -2705,8 +2732,13 @@ class MainWindow(QMainWindow):
             lambda: _quick_look(sel[0].path) if sel else None)
         menu.addAction(f"💾  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
         menu.addSeparator()
-        menu.addAction("🔍  Search Tags…").triggered.connect(lambda: self.tag_panel._search("tags_only"))
-        menu.addAction("🖼  Cover Only…").triggered.connect(lambda: self.tag_panel._search("cover_only"))
+        act_tags = menu.addAction("🔍  Search Tags…")
+        act_tags.triggered.connect(lambda: self.tag_panel._search("tags_only"))
+        act_cover = menu.addAction("🖼  Cover Only…")
+        act_cover.triggered.connect(lambda: self.tag_panel._search("cover_only"))
+        if not _is_pro:
+            act_tags.setText("🔍  Search Tags…  ✦ Pro")
+            act_cover.setText("🖼  Cover Only…  ✦ Pro")
         menu.addSeparator()
         menu.addAction("✏️  Rename").triggered.connect(self.tag_panel._rename)
         menu.addSeparator()
