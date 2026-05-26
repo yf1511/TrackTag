@@ -2435,8 +2435,8 @@ class MainWindow(QMainWindow):
 
         # Update check
         try:
-            _uc = UpdateChecker(self)
-            _uc.start()
+            self._update_checker = UpdateChecker(self)
+            self._update_checker.start()
         except Exception as ex:
             print(f"[updater] startup check failed: {ex}")
 

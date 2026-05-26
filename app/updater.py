@@ -152,7 +152,22 @@ class UpdateChecker:
         try:
             from version import __version__ as current
         except ImportError:
-            current = "0.0.0"
+            try:
+                import sys, os
+                # In bundled app, version.py is at sys._MEIPASS or next to executable
+                for base in (getattr(sys, '_MEIPASS', None),
+                             os.path.dirname(sys.executable),
+                             os.path.dirname(os.path.dirname(__file__))):
+                    if base:
+                        vpath = os.path.join(base, 'version.py')
+                        if os.path.exists(vpath):
+                            ns = {}; exec(open(vpath).read(), ns)
+                            current = ns.get('__version__', '0.0.0')
+                            break
+                else:
+                    current = "0.0.0"
+            except Exception:
+                current = "0.0.0"
 
         if _parse_version(latest_tag) > _parse_version(current):
             self._show_banner(latest_tag, url)
