@@ -18,7 +18,7 @@ from pathlib import Path
 # ── License server URL — trage hier deine Railway-URL ein ────────────────────
 LICENSE_SERVER = os.environ.get(
     "TRACKTAG_LICENSE_SERVER",
-    "https://tracktag-production-0aef.up.railway.app"
+    "https://tracktag-production-8950.up.railway.app"
 )
 
 # ── Local storage ─────────────────────────────────────────────────────────────
