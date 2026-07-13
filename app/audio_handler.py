@@ -246,17 +246,23 @@ class AudioFile:
     # ── cover normalization (Rekordbox compatibility) ─────────────────────────
 
     def _normalize_cover(self):
-        """Convert cover to JPEG and resize to max 1000px — required for Rekordbox."""
+        """Convert cover to JPEG and resize per user setting — required for Rekordbox."""
         if not self.cover_data:
             return
         try:
             from PIL import Image
             import io
+            max_px = 1000
+            try:
+                from PyQt6.QtCore import QSettings
+                max_px = int(QSettings("TrackTag", "TrackTag").value("cover_max_size", 1000))
+            except Exception:
+                pass
             img = Image.open(io.BytesIO(self.cover_data))
             if img.mode not in ('RGB',):
                 img = img.convert('RGB')
-            if max(img.size) > 1000:
-                img.thumbnail((1000, 1000), Image.LANCZOS)
+            if max_px and max(img.size) > max_px:
+                img.thumbnail((max_px, max_px), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=92, optimize=True)
             self.cover_data = buf.getvalue()

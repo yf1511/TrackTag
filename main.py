@@ -25,10 +25,10 @@ def _dark_palette() -> QPalette:
     p.setColor(QPalette.ColorRole.Button,          QColor(44, 44, 46))
     p.setColor(QPalette.ColorRole.ButtonText,      QColor(235, 235, 245))
     # Highlights
-    p.setColor(QPalette.ColorRole.Highlight,       QColor(10, 132, 255))   # #0a84ff
+    p.setColor(QPalette.ColorRole.Highlight,       QColor(124, 58, 237))   # #7c3aed
     p.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
     # Links
-    p.setColor(QPalette.ColorRole.Link,            QColor(10, 132, 255))
+    p.setColor(QPalette.ColorRole.Link,            QColor(124, 58, 237))
     # Tooltips
     p.setColor(QPalette.ColorRole.ToolTipBase,     QColor(44, 44, 46))
     p.setColor(QPalette.ColorRole.ToolTipText,     QColor(235, 235, 245))
@@ -62,7 +62,7 @@ QMenuBar::item:selected { background: #2c2c2e; }
 QMenu                { background: #2c2c2e; color: #ebebf5; border: 1px solid #3a3a3c;
                         border-radius: 8px; padding: 4px 0; }
 QMenu::item          { padding: 6px 22px; }
-QMenu::item:selected { background: #0a84ff; border-radius: 4px; color: white; }
+QMenu::item:selected { background: #7c3aed; border-radius: 4px; color: white; }
 QMenu::separator     { height: 1px; background: #3a3a3c; margin: 4px 10px; }
 
 /* ── Status bar ────────────────────────────────────────────────────── */
@@ -76,9 +76,9 @@ QLineEdit {
     border-radius: 6px;
     padding: 4px 8px;
     color: #ebebf5;
-    selection-background-color: #0a84ff;
+    selection-background-color: #7c3aed;
 }
-QLineEdit:focus  { border-color: #0a84ff; background: #1c2d40; }
+QLineEdit:focus  { border-color: #7c3aed; background: #1d1230; }
 QLineEdit:disabled { background: #1c1c1e; color: #636366; border-color: #2c2c2e; }
 
 /* ── ComboBox (genre picker) ───────────────────────────────────────── */
@@ -89,13 +89,13 @@ QComboBox {
     padding: 4px 8px;
     color: #ebebf5;
 }
-QComboBox:focus  { border-color: #0a84ff; }
+QComboBox:focus  { border-color: #7c3aed; }
 QComboBox::drop-down { border: none; width: 20px; }
 QComboBox::down-arrow { image: none; width: 0; }
 QComboBox QAbstractItemView {
     background: #2c2c2e;
     border: 1px solid #3a3a3c;
-    selection-background-color: #0a84ff;
+    selection-background-color: #7c3aed;
     color: #ebebf5;
     border-radius: 6px;
     padding: 2px;
@@ -120,11 +120,11 @@ QTableWidget {
     gridline-color: #242424;
     border: none;
     color: #e5e5ea;
-    selection-background-color: #0a84ff;
+    selection-background-color: #7c3aed;
     selection-color: white;
 }
 QTableWidget::item { padding: 2px 6px; }
-QTableWidget::item:selected { background: #0a84ff; color: white; }
+QTableWidget::item:selected { background: #7c3aed; color: white; }
 
 QHeaderView::section {
     background: #1c1c1e;

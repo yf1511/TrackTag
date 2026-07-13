@@ -131,7 +131,7 @@ def activate(key: str) -> tuple[bool, str]:
             "Deactivate it there first (Settings → License → Deactivate)."
         ),
     }
-    return False, messages.get(error, f"Fehler: {error}")
+    return False, messages.get(error, f"Error: {error}")
 
 
 def deactivate() -> tuple[bool, str]:
@@ -153,7 +153,7 @@ def deactivate() -> tuple[bool, str]:
         # Offline deaktiviert — lokal gelöscht, Server weiß es noch nicht.
         # Das ist ok: nächste Aktivierung auf neuem Mac schlägt fehl bis
         # der Server ihn sieht — aber da wir ihn lokal löschen ist das sicher.
-        return True, "Lizenz lokal deaktiviert (Server offline)."
+        return True, "License deactivated locally (server offline)."
 
     return True, ""
 

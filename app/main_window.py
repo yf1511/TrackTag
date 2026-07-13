@@ -2,7 +2,6 @@ import json
 import os
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -15,18 +14,20 @@ _GENRES_FILE  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sideba
 _is_pro = False
 
 from PyQt6.QtWidgets import (
-    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QFormLayout,
+    QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QSplitter, QTableWidget, QTableWidgetItem, QLabel, QLineEdit,
     QPushButton, QFileDialog, QScrollArea, QAbstractItemView,
     QHeaderView, QMessageBox, QMenu, QComboBox, QCompleter,
-    QSizePolicy, QFrame, QSlider, QStyledItemDelegate,
-    QStyleOptionViewItem, QApplication, QDialog,
+    QFrame, QStyledItemDelegate,
+    QApplication, QDialog,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QBuffer, QIODevice, QSize, QRect, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QBuffer, QIODevice, QSize, QRect, QTimer, QSettings
 from PyQt6.QtGui import (
-    QPixmap, QIcon, QAction, QKeySequence, QDragEnterEvent,
-    QDropEvent, QImage, QFont, QColor, QPen, QPainter,
+    QPixmap, QIcon, QAction, QKeySequence, QShortcut,
+    QFont, QColor, QPen, QPainter,
 )
+
+_SETTINGS = lambda: QSettings("TrackTag", "TrackTag")
 
 from .audio_handler import AudioFile, SUPPORTED_EXTENSIONS
 from .cover_search import MetaSearchDialog
@@ -284,49 +285,24 @@ def _subtitle(title: str) -> str:
         return m.group(0)
     return ""
 
-def _fmt_time(secs: float) -> str:
-    s = max(0, int(secs))
-    return f"{s//60}:{s%60:02d}"
-
-
 # ── Custom table delegate ─────────────────────────────────────────────────────
-
-class ClickSlider(QSlider):
-    """QSlider that jumps directly to clicked position + allows dragging.
-    macOS default is page-step behaviour — we bypass it entirely."""
-
-    def _pct_to_val(self, x: float) -> int:
-        pct = max(0.0, min(1.0, x / max(self.width(), 1)))
-        return int(pct * self.maximum())
-
-    def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.setValue(self._pct_to_val(e.position().x()))
-            self.sliderPressed.emit()
-            e.accept()
-        else:
-            super().mousePressEvent(e)
-
-    def mouseMoveEvent(self, e):
-        if e.buttons() & Qt.MouseButton.LeftButton:
-            self.setValue(self._pct_to_val(e.position().x()))
-            e.accept()
-        else:
-            super().mouseMoveEvent(e)
-
-    def mouseReleaseEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self.setValue(self._pct_to_val(e.position().x()))
-            self.sliderReleased.emit()
-            e.accept()
-        else:
-            super().mouseReleaseEvent(e)
-
 
 class NoScrollComboBox(QComboBox):
     """ComboBox that ignores scroll wheel — prevents accidental genre changes while scrolling."""
     def wheelEvent(self, e):
         e.ignore()
+
+
+_SORT_ROLE = Qt.ItemDataRole.UserRole + 7
+
+class SortItem(QTableWidgetItem):
+    """Table item that sorts numerically when a sort key is set, else case-insensitive."""
+    def __lt__(self, other):
+        a = self.data(_SORT_ROLE); b = other.data(_SORT_ROLE)
+        if a is not None and b is not None:
+            try: return a < b
+            except TypeError: pass
+        return self.text().lower() < other.text().lower()
 
 
 class TrackDelegate(QStyledItemDelegate):
@@ -554,7 +530,7 @@ class ProActivateDialog(QDialog):
 
         self._field = QLineEdit()
         self._field.setFixedHeight(42)
-        self._field.setPlaceholderText("TRACKTAG-BETA-2024-PRO")
+        self._field.setPlaceholderText("TT-XXXX-XXXX-XXXX-XXXX")
         self._field.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._field.returnPressed.connect(self._try_activate)
         root.addWidget(self._field)
@@ -722,14 +698,13 @@ class DragOverlay(QWidget):
         painter.drawRoundedRect(r, 16, 16)
 
         # Centered icon + text
-        cx, cy = self.rect().center().x(), self.rect().center().y()
         painter.setPen(QColor(198, 168, 255, 220))
-        font = QFont("-apple-system", 15, QFont.Weight.Bold)
+        font = QFont(self.font()); font.setPointSize(15); font.setBold(True)
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 20, 0, 0),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                          "Drop audio files here")
-        font2 = QFont("-apple-system", 11)
+        font2 = QFont(self.font()); font2.setPointSize(11)
         painter.setFont(font2)
         painter.setPen(QColor(167, 139, 250, 160))
         painter.drawText(self.rect().adjusted(0, 60, 0, 0),
@@ -1063,7 +1038,7 @@ class NavSidebar(QWidget):
             nav.setParent(None)
         self._genre_navs.clear()
 
-        if not self._genre_vbox:
+        if self._genre_vbox is None:
             return
 
         for genre in self._genres:
@@ -1083,15 +1058,22 @@ class NavSidebar(QWidget):
         seen = set()
         for af in audio_files:
             g = (getattr(af, 'genre', '') or '').strip()
-            if g:
-                seen.add(g)
-            else:
-                seen.add('No Genre')
-        for g in seen:
+            seen.add(g if g else 'No Genre')
+        for g in sorted(seen):
             if g not in self._genres:
                 self._genres.append(g)
         self._save_genres()
         self._rebuild_genre_navs()
+        self.update_genre_counts(audio_files)
+
+    def update_genre_counts(self, audio_files):
+        """Refresh the per-genre track count badges."""
+        counts: dict[str, int] = {}
+        for af in audio_files:
+            g = (getattr(af, 'genre', '') or '').strip() or 'No Genre'
+            counts[g] = counts.get(g, 0) + 1
+        for g, nav in self._genre_navs.items():
+            nav.set_count(counts.get(g, 0))
 
     def _genre_context_menu(self, genre: str, nav: "NavItem", pos):
         menu = QMenu(self)
@@ -1260,11 +1242,16 @@ class TagPanel(QWidget):
         self.cover.setGeometry(0,0,CoverLabel._SIZE,CoverLabel._SIZE)
         self.cover.clicked.connect(self._pick_cover)
         self.cover.cover_changed.connect(self._on_cover)
-        edit_btn = QPushButton("✏", cover_wrap)
+        edit_btn = QPushButton(cover_wrap)
         edit_btn.setFixedSize(30,30); edit_btn.move(CoverLabel._SIZE-36, 6); edit_btn.raise_()
+        try:
+            edit_btn.setIcon(_ico("fa5s.pen", "#ffffff"))
+            edit_btn.setIconSize(QSize(12, 12))
+        except Exception:
+            edit_btn.setText("Edit")
         edit_btn.setStyleSheet(
             "QPushButton{background:rgba(0,0,0,0.70);color:#fff;border:none;"
-            "border-radius:8px;font-size:13px;}"
+            "border-radius:8px;font-size:11px;}"
             "QPushButton:hover{background:rgba(0,0,0,0.90);}")
         edit_btn.clicked.connect(self._pick_cover)
         csv.addWidget(cover_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -1311,7 +1298,7 @@ class TagPanel(QWidget):
         fi = QWidget(); fi.setStyleSheet(f"background:{C_SURFACE2};")
         fv = QVBoxLayout(fi); fv.setContentsMargins(16,12,16,14); fv.setSpacing(7)
 
-        for field, lbl in [("title","Titel"), ("artist","Interpret"),
+        for field, lbl in [("title","Title"), ("artist","Artist"),
                             ("album","Album"), ("genre","Genre"), ("label","Label")]:
             w = self._mk_combo(field) if field == "genre" else self._mk_line(field)
             fv.addLayout(self._frow(lbl, w))
@@ -1320,21 +1307,21 @@ class TagPanel(QWidget):
         jb = QHBoxLayout(); jb.setSpacing(10)
         yw = self._mk_line("year")
         bw = self._mk_line("bpm")
-        jb.addLayout(self._frow("Jahr", yw, lbl_w=46))
+        jb.addLayout(self._frow("Year", yw, lbl_w=46))
         jb.addLayout(self._frow("BPM",  bw, lbl_w=40))
         fv.addLayout(jb)
 
         fv.addLayout(self._frow("Key",      self._mk_line("key")))
-        fv.addLayout(self._frow("Kommentar",self._mk_line("comment")))
+        fv.addLayout(self._frow("Comment",  self._mk_line("comment")))
         c.addWidget(fi)
 
         # ── ERWEITERT section ──────────────────────────────────────────────
-        c.addWidget(self._sec_hdr("ERWEITERT", C_ACCENT2))
+        c.addWidget(self._sec_hdr("ADVANCED", C_ACCENT2))
 
         ei = QWidget(); ei.setStyleSheet(f"background:{C_SURFACE2};")
         ev = QVBoxLayout(ei); ev.setContentsMargins(16,12,16,14); ev.setSpacing(7)
-        ev.addLayout(self._frow("Album-Interpret", self._mk_line("album_artist")))
-        ev.addLayout(self._frow("Komponist",        self._mk_line("composer")))
+        ev.addLayout(self._frow("Album Artist", self._mk_line("album_artist")))
+        ev.addLayout(self._frow("Composer",     self._mk_line("composer")))
 
         # Track # — half width
         trk_row = QHBoxLayout(); trk_row.setSpacing(0)
@@ -1376,7 +1363,12 @@ class TagPanel(QWidget):
         bl = QVBoxLayout(bar); bl.setContentsMargins(16,10,16,14); bl.setSpacing(8)
 
         # Rename button — subtle, arrow-style
-        self.rename_btn = QPushButton("— Rename  →  Artist – Title  ›")
+        self.rename_btn = QPushButton("  Rename Files")
+        try:
+            self.rename_btn.setIcon(_ico("fa5s.i-cursor", C_TEXT2))
+            self.rename_btn.setIconSize(QSize(11, 11))
+        except Exception:
+            pass
         self.rename_btn.setFixedHeight(34)
         self.rename_btn.setStyleSheet(f"""
             QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};
@@ -1443,45 +1435,6 @@ class TagPanel(QWidget):
         w.currentTextChanged.connect(lambda t, f=field: self._edited(f, t))
         self.fields[field] = w; return w
 
-    def _pair(self, f1, l1, f2, l2) -> QWidget:
-        w = QWidget(); w.setStyleSheet("background:transparent;")
-        row = QHBoxLayout(w); row.setContentsMargins(0,0,0,0); row.setSpacing(8)
-        for field, label in [(f1,l1),(f2,l2)]:
-            if not field:
-                row.addStretch(); continue
-            col = QVBoxLayout(); col.setSpacing(3)
-            col.addWidget(self._lbl(label))
-            col.addWidget(self._mk_line(field))
-            row.addLayout(col)
-        return w
-
-    @staticmethod
-    def _lbl(text: str) -> QLabel:
-        l = QLabel(text)
-        l.setStyleSheet(f"color:{C_TEXT2};font-size:11px;font-weight:500;background:transparent;")
-        return l
-
-    @staticmethod
-    def _div() -> QFrame:
-        f = QFrame(); f.setFixedHeight(1)
-        f.setStyleSheet(f"background:{C_BORDER};margin:4px 0;"); return f
-
-    @staticmethod
-    def _pill(fa_icon: str, text: str, accent: str) -> QPushButton:
-        btn = QPushButton(f"  {text}"); btn.setFixedHeight(32)
-        try:
-            btn.setIcon(_ico(fa_icon, C_TEXT2))
-            btn.setIconSize(QSize(12, 12))
-        except Exception:
-            btn.setText(text)
-        btn.setStyleSheet(
-            f"QPushButton{{background:{C_SURFACE2};color:{C_TEXT};"
-            f"border:1px solid {C_BORDER};border-radius:8px;"
-            f"font-size:11px;font-weight:500;}}"
-            f"QPushButton:hover{{background:{C_BORDER};border-color:{accent};color:#fff;}}"
-            f"QPushButton:disabled{{color:{C_TEXT3};border-color:{C_BG};}}")
-        return btn
-
     def _set_enabled(self, on: bool):
         for w in self.fields.values(): w.setEnabled(on)
         self.save_btn.setEnabled(on)
@@ -1514,7 +1467,7 @@ class TagPanel(QWidget):
                 if isinstance(w,QComboBox): w.setCurrentText(common or "")
                 else:
                     w.setText(common or "")
-                    w.setPlaceholderText("" if common is not None else "← verschiedene Werte")
+                    w.setPlaceholderText("" if common is not None else "← multiple values")
             self._show_cover(files[0].cover_data if files else None)
         self._loading = False
 
@@ -1544,7 +1497,7 @@ class TagPanel(QWidget):
     def _pick_cover(self):
         if not self._files: return
         path,_ = QFileDialog.getOpenFileName(self,"Select Cover","",
-            "Bilder (*.jpg *.jpeg *.png *.bmp *.webp)")
+            "Images (*.jpg *.jpeg *.png *.bmp *.webp)")
         if not path: return
         with open(path,"rb") as fh: data=fh.read()
         self.cover.set_cover_data(data, "image/png" if path.endswith(".png") else "image/jpeg")
@@ -1620,19 +1573,25 @@ class TagPanel(QWidget):
         if not self._files: return
         _INV=set('/\\:*?"<>|')
         def san(s): return "".join("_" if c in _INV else c for c in s).strip(" .")
+        pattern = _SETTINGS().value("rename_pattern", "%artist% - %title%", str) or "%artist% - %title%"
         renamed,skipped,errors=0,0,[]
         for f in self._files:
-            a,t=f.artist.strip(),f.title.strip()
-            if not a or not t:
-                skipped+=1; errors.append(f"⚠️  '{f.filename}' — fehlt Interpret/Titel"); continue
-            nn=f"{san(a)} - {san(t)}{f.extension}"
+            name = pattern
+            for tok, val in (("%artist%",f.artist),("%title%",f.title),
+                              ("%album%",f.album),("%year%",f.year),
+                              ("%bpm%",f.bpm),("%key%",f.key)):
+                name = name.replace(tok, san(val.strip()))
+            name = name.strip(" -_.")
+            if not name or "%" in name:
+                skipped+=1; errors.append(f"'{f.filename}' — missing tag values for pattern"); continue
+            nn=f"{name}{f.extension}"
             np=os.path.join(os.path.dirname(f.path),nn)
             if f.path==np: skipped+=1; continue
             if os.path.exists(np):
-                errors.append(f"⚠️  '{nn}' existiert bereits"); skipped+=1; continue
+                errors.append(f"'{nn}' already exists"); skipped+=1; continue
             try:
                 os.rename(f.path,np); f.path=np; f.filename=nn; renamed+=1
-            except OSError as e: errors.append(f"❌  '{f.filename}': {e}")
+            except OSError as e: errors.append(f"'{f.filename}': {e}")
         self.tags_changed.emit()
         if errors:
             QMessageBox.warning(self.window(), "Rename",
@@ -1655,279 +1614,6 @@ def _quick_look(path: str):
         )
     except Exception as ex:
         print(f"Quick Look failed: {ex}")
-
-
-# ── Audio player (bottom bar) ─────────────────────────────────────────────────
-
-class AudioPlayer(QWidget):
-    """Bottom preview player — uses macOS afplay."""
-
-    request_prev = pyqtSignal()
-    request_next = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._af: Optional[AudioFile] = None
-        self._proc = None
-        self._start = 0.0
-        self._offset = 0.0   # paused position
-        self._playing = False
-
-        self._timer = QTimer(self)
-        self._timer.setInterval(250)
-        self._timer.timeout.connect(self._tick)
-        self._setup_ui()
-
-    def _setup_ui(self):
-        self.setFixedHeight(86)
-        self.setStyleSheet(f"background:{C_BG};border-top:1px solid {C_BORDER};")
-
-        lay = QHBoxLayout(self); lay.setContentsMargins(20, 0, 20, 0); lay.setSpacing(0)
-
-        # Left: cover + info (fixed width so center stays truly centered)
-        left = QWidget(); left.setFixedWidth(280)
-        left.setStyleSheet("background:transparent;border:none;")
-        left_row = QHBoxLayout(left); left_row.setContentsMargins(0, 0, 0, 0); left_row.setSpacing(10)
-
-        self.cover_lbl = QLabel()
-        self.cover_lbl.setFixedSize(48, 48)
-        self.cover_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cover_lbl.setStyleSheet(
-            f"background:{C_SURFACE2};border-radius:8px;border:none;")
-        left_row.addWidget(self.cover_lbl)
-
-        info_col = QVBoxLayout(); info_col.setSpacing(2)
-        info_col.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.title_lbl = QLabel("—")
-        self.title_lbl.setStyleSheet(
-            f"color:{C_TEXT};font-size:13px;font-weight:600;"
-            f"background:transparent;border:none;")
-        self.title_lbl.setWordWrap(False)
-        self.artist_lbl = QLabel("—")
-        self.artist_lbl.setStyleSheet(
-            f"color:{C_TEXT2};font-size:11px;background:transparent;border:none;")
-        info_col.addWidget(self.title_lbl); info_col.addWidget(self.artist_lbl)
-        left_row.addLayout(info_col, 1)
-        lay.addWidget(left)
-
-        # Center: controls + progress bar
-        center = QVBoxLayout()
-        center.setSpacing(0)
-        center.setContentsMargins(0, 0, 0, 0)
-        center.addStretch(3)   # bigger top push → controls sit slightly above center
-
-        ctrl = QHBoxLayout(); ctrl.setSpacing(0); ctrl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        _skip_ss = (f"QPushButton{{background:transparent;color:{C_TEXT3};border:none;"
-                    f"font-size:12px;font-weight:700;padding:0;}}"
-                    f"QPushButton:hover{{color:{C_TEXT};border:none;}}"
-                    f"QPushButton:pressed{{color:{C_TEXT2};border:none;}}"
-                    f"QPushButton:disabled{{color:{C_BORDER};border:none;}}")
-
-        b_prev = QPushButton("◀◀"); b_prev.setFixedSize(32, 32)
-        b_prev.setStyleSheet(_skip_ss)
-        b_prev.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        b_prev.clicked.connect(self.request_prev.emit)
-        ctrl.addWidget(b_prev)
-        ctrl.addSpacing(6)
-
-        # Play/pause button — white circle, dark icon
-        self.play_btn = QPushButton("▶")
-        self.play_btn.setFixedSize(42, 42)
-        self.play_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.play_btn.setStyleSheet(f"""
-            QPushButton{{
-                background:{C_TEXT};color:{C_BG};
-                border:none;border-radius:21px;
-                font-size:15px;font-weight:800;
-                padding-left:2px;
-            }}
-            QPushButton:hover{{background:#e8e8e8;border:none;}}
-            QPushButton:pressed{{background:#cccccc;border:none;}}
-            QPushButton:disabled{{background:{C_BORDER};color:{C_TEXT3};border:none;}}
-        """)
-        self.play_btn.clicked.connect(self.toggle)
-        ctrl.addWidget(self.play_btn)
-        ctrl.addSpacing(6)
-
-        b_next = QPushButton("▶▶"); b_next.setFixedSize(32, 32)
-        b_next.setStyleSheet(_skip_ss)
-        b_next.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        b_next.clicked.connect(self.request_next.emit)
-        ctrl.addWidget(b_next)
-
-        center.addLayout(ctrl)
-        center.addStretch(1)   # small gap between ctrl and progress
-        center.addSpacing(2)
-
-        # Progress row
-        prog_row = QHBoxLayout(); prog_row.setSpacing(8); prog_row.setContentsMargins(0, 0, 0, 0)
-        self.t_cur = QLabel("0:00")
-        self.t_cur.setStyleSheet(
-            f"color:{C_TEXT3};font-size:10px;font-weight:500;"
-            f"background:transparent;border:none;min-width:32px;")
-        self.t_tot = QLabel("0:00")
-        self.t_tot.setStyleSheet(
-            f"color:{C_TEXT3};font-size:10px;font-weight:500;"
-            f"background:transparent;border:none;min-width:32px;")
-        self.t_tot.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-
-        self.progress = ClickSlider(Qt.Orientation.Horizontal)
-        self.progress.setRange(0, 1000); self.progress.setValue(0)
-        self.progress.setFixedHeight(16)
-        self.progress.setStyleSheet(f"""
-            QSlider{{background:transparent;border:none;}}
-            QSlider::groove:horizontal{{
-                background:{C_BORDER};height:3px;border-radius:2px;margin:0;border:none;
-            }}
-            QSlider::sub-page:horizontal{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_ACCENT}, stop:1 {C_ACCENT2});
-                height:3px;border-radius:2px;border:none;
-            }}
-            QSlider::handle:horizontal{{
-                background:{C_TEXT};width:10px;height:10px;
-                border-radius:5px;margin:-4px 0;border:none;
-            }}
-            QSlider::handle:horizontal:hover{{
-                background:#ffffff;border:none;
-            }}
-        """)
-        self.progress.sliderPressed.connect(self._on_seek_start)
-        self.progress.sliderReleased.connect(self._on_seek_end)
-
-        prog_row.addWidget(self.t_cur)
-        prog_row.addWidget(self.progress, 1)
-        prog_row.addWidget(self.t_tot)
-        center.addLayout(prog_row)
-        center.addStretch(2)   # bottom padding
-
-        lay.addLayout(center, 1)
-
-        # Right: volume (fixed width mirrors left)
-        right = QWidget(); right.setFixedWidth(160)
-        right.setStyleSheet("background:transparent;border:none;")
-        vol_row = QHBoxLayout(right); vol_row.setContentsMargins(0, 0, 0, 0); vol_row.setSpacing(8)
-
-        vol_ic = QLabel()
-        vol_ic.setFixedSize(18, 18)
-        vol_ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        vol_ic.setStyleSheet("background:transparent;border:none;")
-        try:
-            vol_ic.setPixmap(_ico("fa5s.volume-up", C_TEXT3).pixmap(14, 14))
-        except Exception:
-            vol_ic.setText("♪")
-            vol_ic.setStyleSheet(f"color:{C_TEXT3};font-size:12px;background:transparent;border:none;")
-
-        self.vol = ClickSlider(Qt.Orientation.Horizontal)
-        self.vol.setRange(0, 100); self.vol.setValue(80)
-        self.vol.setFixedHeight(16)
-        self.vol.setStyleSheet(f"""
-            QSlider{{background:transparent;border:none;}}
-            QSlider::groove:horizontal{{
-                background:{C_BORDER};height:3px;border-radius:2px;margin:0;border:none;
-            }}
-            QSlider::sub-page:horizontal{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_PRIMARY}, stop:1 #a855f7);
-                height:3px;border-radius:2px;border:none;
-            }}
-            QSlider::handle:horizontal{{
-                background:{C_TEXT};width:10px;height:10px;
-                border-radius:5px;margin:-4px 0;border:none;
-            }}
-            QSlider::handle:horizontal:hover{{
-                background:#ffffff;border:none;
-            }}
-        """)
-        vol_row.addWidget(vol_ic); vol_row.addWidget(self.vol, 1)
-        lay.addWidget(right)
-        self._seeking = False
-
-    def load(self, af: AudioFile):
-        was_playing = self._playing
-        self.stop()
-        self._af = af
-        self._offset = 0.0
-        self.title_lbl.setText(af.title or af.filename)
-        self.artist_lbl.setText(af.artist or "")
-        dur = int(af.duration)
-        self.t_tot.setText(_fmt_time(dur))
-        self.t_cur.setText("0:00"); self.progress.setValue(0)
-        if af.cover_data:
-            pix = QPixmap(); pix.loadFromData(af.cover_data)
-            if not pix.isNull():
-                self.cover_lbl.setPixmap(pix.scaled(46,46,
-                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
-                    Qt.TransformationMode.SmoothTransformation))
-        else:
-            self.cover_lbl.clear()
-        if was_playing:
-            self._do_play()
-
-    def toggle(self):
-        if self._playing: self._do_pause()
-        elif self._af:    self._do_play()
-
-    def stop(self):
-        if self._proc:
-            try: self._proc.terminate()
-            except: pass
-            self._proc = None
-        self._playing = False; self._timer.stop()
-        self._offset = 0.0; self.progress.setValue(0); self.t_cur.setText("0:00")
-        self.play_btn.setText("▶")
-
-    def _do_play(self):
-        if not self._af: return
-        if self._proc:
-            try: self._proc.terminate()
-            except: pass
-        vol = self.vol.value() / 100.0
-        cmd = ['afplay', '-v', str(vol)]
-        if self._offset > 0:
-            cmd += ['-t', str(max(0, self._af.duration - self._offset)),
-                    '-s', str(self._offset)]
-        cmd.append(self._af.path)
-        self._proc = subprocess.Popen(cmd,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self._start = time.time() - self._offset
-        self._playing = True; self._timer.start()
-        self.play_btn.setText("⏸")
-
-    def _do_pause(self):
-        self._offset = time.time() - self._start
-        if self._proc:
-            try: self._proc.terminate()
-            except: pass
-            self._proc = None
-        self._playing = False; self._timer.stop()
-        self.play_btn.setText("▶")
-
-    def _on_seek_start(self):
-        self._seeking = True
-        if self._playing: self._do_pause()
-
-    def _on_seek_end(self):
-        self._seeking = False
-        if self._af:
-            pct = self.progress.value() / 1000.0
-            self._offset = pct * self._af.duration
-            self.t_cur.setText(_fmt_time(self._offset))
-            self._do_play()
-
-    def _tick(self):
-        if not self._playing or self._seeking: return
-        if self._proc and self._proc.poll() is not None:
-            self.stop(); return
-        elapsed = time.time() - self._start
-        dur = self._af.duration if self._af else 1
-        pct = min(elapsed / dur, 1.0)
-        self.progress.setValue(int(pct * 1000))
-        self.t_cur.setText(_fmt_time(elapsed))
-
-    def closeEvent(self, e):
-        self.stop(); super().closeEvent(e)
 
 
 # ── Settings dialog ───────────────────────────────────────────────────────────
@@ -1979,7 +1665,6 @@ class SettingsDialog(QDialog):
         from PyQt6.QtWidgets import QTabWidget
         tabs = QTabWidget()
         tabs.addTab(self._general_tab(), "General")
-        tabs.addTab(self._audio_tab(), "Audio")
         tabs.addTab(self._metadata_tab(), "Metadata")
         tabs.addTab(self._about_tab(), "About")
         root.addWidget(tabs, 1)
@@ -2021,11 +1706,14 @@ class SettingsDialog(QDialog):
     def _general_tab(self) -> QWidget:
         w = QWidget(); w.setStyleSheet(f"background:{C_SURFACE2};")
         v = QVBoxLayout(w); v.setContentsMargins(20, 16, 20, 16); v.setSpacing(10)
+        s = _SETTINGS()
 
         v.addWidget(self._section("FILE RENAMING"))
         v.addSpacing(2)
-        pattern = QLineEdit("%artist% - %title%")
+        pattern = QLineEdit(s.value("rename_pattern", "%artist% - %title%", str))
         pattern.setFixedHeight(34); pattern.setStyleSheet(_INPUT)
+        pattern.textChanged.connect(
+            lambda t: _SETTINGS().setValue("rename_pattern", t.strip() or "%artist% - %title%"))
         v.addLayout(self._field_row("Rename Pattern", pattern))
         hint = QLabel("Available tags: %artist%  %title%  %album%  %year%  %bpm%  %key%")
         hint.setStyleSheet(f"color:{C_TEXT3};font-size:10px;padding-left:172px;")
@@ -2035,75 +1723,61 @@ class SettingsDialog(QDialog):
         v.addWidget(self._section("SORT & DISPLAY"))
         v.addSpacing(2)
         sort_combo = QComboBox()
-        sort_combo.addItems(["Title", "Artist", "BPM", "Key", "Genre", "Date Added"])
+        sort_combo.addItems(["None", "Title", "Artist", "Genre", "BPM", "Key"])
+        sort_combo.setCurrentText(s.value("default_sort", "None", str))
         sort_combo.setFixedHeight(34); sort_combo.setStyleSheet(_COMBO)
+        sort_combo.currentTextChanged.connect(
+            lambda t: _SETTINGS().setValue("default_sort", t))
         v.addLayout(self._field_row("Default Sort", sort_combo))
+        sort_hint = QLabel("Applied when files are added to the library.")
+        sort_hint.setStyleSheet(f"color:{C_TEXT3};font-size:10px;padding-left:172px;")
+        v.addWidget(sort_hint)
         v.addSpacing(6)
 
-        v.addWidget(self._section("STARTUP"))
+        v.addWidget(self._section("PREVIEW"))
         v.addSpacing(2)
-        restore_combo = QComboBox()
-        restore_combo.addItems(["Empty library", "Restore last session", "Open dialog"])
-        restore_combo.setFixedHeight(34); restore_combo.setStyleSheet(_COMBO)
-        v.addLayout(self._field_row("On Launch", restore_combo))
-        v.addStretch()
-        return w
-
-    def _audio_tab(self) -> QWidget:
-        w = QWidget(); w.setStyleSheet(f"background:{C_SURFACE2};")
-        v = QVBoxLayout(w); v.setContentsMargins(20, 16, 20, 16); v.setSpacing(10)
-
-        v.addWidget(self._section("QUICK LOOK"))
-        v.addSpacing(2)
-
         info = QLabel(
-            'Press Space or choose "Quick Look" from the context menu\n'
-            'to preview a track using macOS Quick Look.')
+            'Select a track and press Space (or right-click → Quick Look)\n'
+            'to preview it with macOS Quick Look.')
         info.setStyleSheet(f"color:{C_TEXT2};font-size:12px;background:transparent;border:none;")
         info.setWordWrap(True)
         v.addWidget(info)
-        v.addSpacing(6)
-
-        v.addWidget(self._section("WAVEFORM"))
-        v.addSpacing(2)
-        waveform_combo = QComboBox()
-        waveform_combo.addItems(["Disabled", "Full waveform", "Mini waveform"])
-        waveform_combo.setFixedHeight(34); waveform_combo.setStyleSheet(_COMBO)
-        v.addLayout(self._field_row("Waveform Display", waveform_combo))
         v.addStretch()
         return w
 
     def _metadata_tab(self) -> QWidget:
         w = QWidget(); w.setStyleSheet(f"background:{C_SURFACE2};")
         v = QVBoxLayout(w); v.setContentsMargins(20, 16, 20, 16); v.setSpacing(10)
-
-        v.addWidget(self._section("ID3 TAGS"))
-        v.addSpacing(2)
-        id3_combo = QComboBox()
-        id3_combo.addItems(["ID3v2.3 (recommended)", "ID3v2.4", "ID3v1 + ID3v2.3"])
-        id3_combo.setFixedHeight(34); id3_combo.setStyleSheet(_COMBO)
-        v.addLayout(self._field_row("ID3 Version", id3_combo))
-        v.addSpacing(6)
+        s = _SETTINGS()
 
         v.addWidget(self._section("COVER ART"))
         v.addSpacing(2)
+        _size_opts = {"1000×1000 px": 1000, "1500×1500 px": 1500,
+                      "3000×3000 px": 3000, "Original size": 0}
         cover_combo = QComboBox()
-        cover_combo.addItems(["1000×1000 px", "1500×1500 px", "3000×3000 px", "Original size"])
+        cover_combo.addItems(list(_size_opts.keys()))
+        cur = int(s.value("cover_max_size", 1000))
+        for lbl, px in _size_opts.items():
+            if px == cur:
+                cover_combo.setCurrentText(lbl); break
         cover_combo.setFixedHeight(34); cover_combo.setStyleSheet(_COMBO)
+        cover_combo.currentTextChanged.connect(
+            lambda t: _SETTINGS().setValue("cover_max_size", _size_opts.get(t, 1000)))
         v.addLayout(self._field_row("Max Cover Size", cover_combo))
-
-        fmt_combo = QComboBox()
-        fmt_combo.addItems(["JPEG (recommended)", "PNG", "Keep original"])
-        fmt_combo.setFixedHeight(34); fmt_combo.setStyleSheet(_COMBO)
-        v.addLayout(self._field_row("Cover Format", fmt_combo))
+        cov_hint = QLabel("Covers are converted to JPEG on save (required by Rekordbox).")
+        cov_hint.setStyleSheet(f"color:{C_TEXT3};font-size:10px;padding-left:172px;")
+        v.addWidget(cov_hint)
         v.addSpacing(6)
 
-        v.addWidget(self._section("TEXT ENCODING"))
+        v.addWidget(self._section("TAG FORMAT"))
         v.addSpacing(2)
-        encoding_combo = QComboBox()
-        encoding_combo.addItems(["UTF-8", "UTF-16", "Latin-1"])
-        encoding_combo.setFixedHeight(34); encoding_combo.setStyleSheet(_COMBO)
-        v.addLayout(self._field_row("Text Encoding", encoding_combo))
+        fmt_info = QLabel(
+            "Tags are written as ID3v2.3 with maximum DJ software compatibility\n"
+            "(Rekordbox, Serato, Traktor). WAV/AIFF use UTF-16 encoding as required\n"
+            "by the strict ID3v2.3 spec; MP3 uses UTF-8.")
+        fmt_info.setStyleSheet(f"color:{C_TEXT2};font-size:12px;background:transparent;border:none;")
+        fmt_info.setWordWrap(True)
+        v.addWidget(fmt_info)
         v.addStretch()
         return w
 
@@ -2137,7 +1811,8 @@ class SettingsDialog(QDialog):
             ("⌘⇧O",         "Open folder"),
             ("⌘S",          "Save selection"),
             ("⌘⇧S",         "Save all"),
-            ("Space",        "Play / Pause preview"),
+            ("Space",        "Quick Look preview"),
+            ("⌘K",          "Focus search"),
             ("⌘A",          "Select all"),
             ("⌘F",          "Search tags"),
             ("⌘V",          "Paste cover art"),
@@ -2256,6 +1931,10 @@ class MainWindow(QMainWindow):
         self.search_field.textChanged.connect(self._filter)
         tbl.addWidget(self.search_field, 1)
 
+        _sc_focus = QShortcut(QKeySequence("Ctrl+K"), self)
+        _sc_focus.activated.connect(
+            lambda: (self.search_field.setFocus(), self.search_field.selectAll()))
+
         sc = QLabel("⌘K")
         sc.setStyleSheet(f"background:{C_SURFACE2};color:{C_TEXT2};"
                          f"font-size:10px;font-weight:600;padding:3px 8px;"
@@ -2288,10 +1967,11 @@ class MainWindow(QMainWindow):
         # List header
         lh = QWidget(); lh.setFixedHeight(52); lh.setStyleSheet(f"background:{C_BG};")
         lhl = QHBoxLayout(lh); lhl.setContentsMargins(20,0,20,0)
-        tl = QLabel("All Tracks"); tl.setStyleSheet(f"color:{C_TEXT};font-size:18px;font-weight:700;background:transparent;")
+        self._list_title = QLabel("All Tracks")
+        self._list_title.setStyleSheet(f"color:{C_TEXT};font-size:18px;font-weight:700;background:transparent;")
         self.count_lbl = QLabel("  0 files")
         self.count_lbl.setStyleSheet(f"color:{C_TEXT2};font-size:13px;background:transparent;")
-        lhl.addWidget(tl); lhl.addWidget(self.count_lbl); lhl.addStretch()
+        lhl.addWidget(self._list_title); lhl.addWidget(self.count_lbl); lhl.addStretch()
         cl.addWidget(lh)
 
         # Filter pills
@@ -2305,31 +1985,23 @@ class MainWindow(QMainWindow):
                        f"QPushButton:hover{{border-color:{C_PRIMARY};color:{C_TEXT};}}"
                        f"QPushButton:checked{{background:{C_PRIMARY};color:#fff;border-color:{C_PRIMARY};}}")
 
-        p_all = QPushButton("All"); p_all.setFixedHeight(28); p_all.setCheckable(True)
-        p_all.setChecked(True); p_all.setStyleSheet(_pill_style)
-        p_all.clicked.connect(lambda: self._genre_filter(None, p_all))
+        self._all_btn = QPushButton("All"); self._all_btn.setFixedHeight(28)
+        self._all_btn.setCheckable(True); self._all_btn.setChecked(True)
+        self._all_btn.setStyleSheet(_pill_style)
+        self._all_btn.clicked.connect(self._reset_filters)
 
         self._genre_btn = QPushButton("Genre  ˅"); self._genre_btn.setFixedHeight(28)
         self._genre_btn.setStyleSheet(_pill_style)
         self._genre_btn.clicked.connect(self._pick_genre_filter)
 
-        p_bpm = QPushButton("BPM  ˅"); p_bpm.setFixedHeight(28)
-        p_bpm.setStyleSheet(_pill_style)
-        p_bpm.clicked.connect(self._pick_bpm_filter)
+        self._bpm_btn = QPushButton("BPM  ˅"); self._bpm_btn.setFixedHeight(28)
+        self._bpm_btn.setStyleSheet(_pill_style)
+        self._bpm_btn.clicked.connect(self._pick_bpm_filter)
 
-        fbl.addWidget(p_all)
+        fbl.addWidget(self._all_btn)
         fbl.addWidget(self._genre_btn)
-        fbl.addWidget(p_bpm)
+        fbl.addWidget(self._bpm_btn)
         fbl.addStretch()
-
-        # View toggle
-        for vico, act in [("☰", True), ("⊟", False)]:
-            vb = QPushButton(vico); vb.setFixedSize(30,30)
-            bg = C_SURFACE2 if act else "transparent"
-            vb.setStyleSheet(f"QPushButton{{background:{bg};color:{C_TEXT if act else C_TEXT2};"
-                              f"border:none;border-radius:7px;font-size:14px;}}"
-                              f"QPushButton:hover{{background:{C_SURFACE2};color:{C_TEXT};}}")
-            fbl.addWidget(vb)
         cl.addWidget(fb)
 
         # Table
@@ -2348,13 +2020,25 @@ class MainWindow(QMainWindow):
         self.table.setWordWrap(False)
         self.table.viewport().setMouseTracking(True)
         self.table.setMouseTracking(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setDefaultSectionSize(130)
-        self.table.horizontalHeader().setMinimumSectionSize(36)
-        self.table.horizontalHeader().setSectionResizeMode(_NUM_COL, QHeaderView.ResizeMode.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(_COVER_COL, QHeaderView.ResizeMode.Fixed)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hh.setDefaultSectionSize(130)
+        hh.setMinimumSectionSize(36)
+        hh.setSectionResizeMode(_NUM_COL, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(_COVER_COL, QHeaderView.ResizeMode.Fixed)
+        hh.setSortIndicatorShown(True)
         self.table.setColumnWidth(_NUM_COL, 40)
         self.table.setColumnWidth(_COVER_COL, 54)
+        # Restore user-adjusted column widths from the last session
+        try:
+            saved = _SETTINGS().value("column_widths")
+            if isinstance(saved, list) and len(saved) == len(COLUMNS):
+                for i, wdt in enumerate(saved):
+                    if i not in (_NUM_COL, _COVER_COL):
+                        self.table.setColumnWidth(i, max(36, int(wdt)))
+                self._cols_restored = True
+        except Exception:
+            pass
         self.table.setStyleSheet(f"""
             QTableWidget{{background:{C_BG};gridline-color:transparent;border:none;
                           selection-background-color:transparent;outline:none;font-size:12px;}}
@@ -2492,9 +2176,23 @@ class MainWindow(QMainWindow):
     def _filter(self, text: str):
         self._apply_filters(search=text)
 
-    def _genre_filter(self, genre: Optional[str], btn: QPushButton):
+    def _reset_filters(self):
+        self._active_genre_filter = None
+        self._active_bpm_min = None
+        self._active_bpm_max = None
+        self._genre_btn.setText("Genre  ˅")
+        self._bpm_btn.setText("BPM  ˅")
+        self._all_btn.setChecked(True)
+        self._apply_filters()
+
+    def _sync_all_pill(self):
+        self._all_btn.setChecked(
+            self._active_genre_filter is None and self._active_bpm_min is None)
+
+    def _genre_filter(self, genre: Optional[str], btn: QPushButton = None):
         self._active_genre_filter = genre
-        self._genre_btn.setText("Genre  ˅" if not genre else f"Genre: {genre}  ✕")
+        self._genre_btn.setText("Genre  ˅" if not genre else f"Genre: {genre}")
+        self._sync_all_pill()
         self._apply_filters()
 
     def _pick_genre_filter(self):
@@ -2510,7 +2208,7 @@ class MainWindow(QMainWindow):
             f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
             f"QMenu::item{{padding:6px 16px;border-radius:6px;font-size:12px;}}"
             f"QMenu::item:selected{{background:{C_PRIMARY};}}")
-        clear = menu.addAction("— Alle Genres —")
+        clear = menu.addAction("All Genres")
         clear.triggered.connect(lambda: self._genre_filter(None, self._genre_btn))
         menu.addSeparator()
         for g in genres_in_lib:
@@ -2525,17 +2223,26 @@ class MainWindow(QMainWindow):
             f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
             f"QMenu::item{{padding:6px 16px;border-radius:6px;font-size:12px;}}"
             f"QMenu::item:selected{{background:{C_PRIMARY};}}")
-        menu.addAction("— Alle BPM —").triggered.connect(lambda: self._set_bpm_filter(None, None))
+        menu.addAction("All BPM").triggered.connect(lambda: self._set_bpm_filter(None, None))
         menu.addSeparator()
         for label, lo, hi in [("< 100 BPM",0,100),("100–125 BPM",100,125),
                                ("125–135 BPM",125,135),("135–150 BPM",135,150),
                                ("> 150 BPM",150,999)]:
             menu.addAction(label).triggered.connect(
                 lambda checked, a=lo, b=hi: self._set_bpm_filter(a, b))
-        menu.exec(self._genre_btn.mapToGlobal(self._genre_btn.rect().bottomLeft()))
+        menu.exec(self._bpm_btn.mapToGlobal(self._bpm_btn.rect().bottomLeft()))
 
     def _set_bpm_filter(self, lo, hi):
         self._active_bpm_min = lo; self._active_bpm_max = hi
+        if lo is None:
+            self._bpm_btn.setText("BPM  ˅")
+        elif hi >= 999:
+            self._bpm_btn.setText(f"BPM: > {lo}")
+        elif lo == 0:
+            self._bpm_btn.setText(f"BPM: < {hi}")
+        else:
+            self._bpm_btn.setText(f"BPM: {lo}–{hi}")
+        self._sync_all_pill()
         self._apply_filters()
 
     def _apply_filters(self, search: str = None):
@@ -2552,10 +2259,13 @@ class MainWindow(QMainWindow):
             it0 = self.table.item(row, _NUM_COL)
             af = it0.data(Qt.ItemDataRole.UserRole) if it0 else None
 
-            # Nav filter: genre sidebar
+            # Nav filter: genre sidebar ("No Genre" matches files without genre)
             if nav_mode == "genre" and nav_value and af:
                 af_genre = (af.genre or "").strip()
-                if af_genre.lower() != nav_value.lower():
+                if nav_value == "No Genre":
+                    if af_genre:
+                        self.table.setRowHidden(row, True); continue
+                elif af_genre.lower() != nav_value.lower():
                     self.table.setRowHidden(row, True); continue
 
             # Search text match
@@ -2584,15 +2294,26 @@ class MainWindow(QMainWindow):
 
             self.table.setRowHidden(row, not match)
 
+        # Count label reflects the filtered view
+        visible = sum(1 for r in range(self.table.rowCount())
+                      if not self.table.isRowHidden(r))
+        total = len(self.audio_files)
+        if visible == total:
+            self.count_lbl.setText(f"  {total} {'file' if total==1 else 'files'}")
+        else:
+            self.count_lbl.setText(f"  {visible} of {total} files")
+
     def _nav_filter(self, mode: str, value: str = ""):
         self._nav_mode = mode
         self._nav_value = value
+        self._list_title.setText(value if mode == "genre" and value else "All Tracks")
         self._apply_filters()
 
     def _update_status(self):
         n = len(self.audio_files)
         self.count_lbl.setText(f"  {n} {'file' if n==1 else 'files'}")
         self.nav.update_counts(n)
+        self.nav.update_genre_counts(self.audio_files)
         if n == 0:
             self.statusBar().showMessage("Drop files here  ·  ⌘O open  ·  ⌘S save")
             return
@@ -2610,6 +2331,11 @@ class MainWindow(QMainWindow):
                 f"{len(unsaved)} file(s) have unsaved changes.\nQuit anyway?",
                 QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
             if r==QMessageBox.StandardButton.Cancel: e.ignore(); return
+        try:
+            _SETTINGS().setValue("column_widths",
+                [self.table.columnWidth(i) for i in range(len(COLUMNS))])
+        except Exception:
+            pass
         e.accept()
 
     # ── File management ───────────────────────────────────────────────────────
@@ -2645,17 +2371,28 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(len(self.audio_files))
         for row,af in enumerate(self.audio_files): self._fill_row(row,af)
         self.table.setSortingEnabled(True)
-        self.table.resizeColumnsToContents()
+        if not getattr(self, '_cols_restored', False):
+            self.table.resizeColumnsToContents()
         self.table.setColumnWidth(_NUM_COL,40); self.table.setColumnWidth(_COVER_COL,54)
+        # Apply default sort from settings
+        _ds = _SETTINGS().value("default_sort", "None", str)
+        _ds_map = {"Title":_TITLE_COL, "Artist":3, "Genre":_GENRE_COL,
+                   "BPM":_BPM_COL, "Key":_KEY_COL}
+        if _ds in _ds_map:
+            self.table.sortItems(_ds_map[_ds], Qt.SortOrder.AscendingOrder)
         self._update_status()
+        self._apply_filters()
+
+    _NUMERIC_FIELDS = {"bpm", "year", "track"}
 
     def _fill_row(self, row: int, af: AudioFile):
         for col,(field,_) in enumerate(COLUMNS):
             if field=="_num":
-                item=QTableWidgetItem(str(row+1))
+                item=SortItem(str(row+1))
+                item.setData(_SORT_ROLE, row+1)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             elif field=="_cover":
-                item=QTableWidgetItem()
+                item=SortItem()
                 if af.cover_data:
                     pix=QPixmap(); pix.loadFromData(af.cover_data)
                     if not pix.isNull():
@@ -2664,12 +2401,26 @@ class MainWindow(QMainWindow):
                             Qt.TransformationMode.SmoothTransformation)))
             elif field=="title":
                 tv=str(getattr(af,"title",""))
-                item=QTableWidgetItem(tv)
+                item=SortItem(tv)
                 item.setData(TrackDelegate.SUBTITLE_ROLE, _subtitle(tv))
             elif field=="key":
-                item=QTableWidgetItem(normalize_key(str(getattr(af,"key",""))))
+                item=SortItem(normalize_key(str(getattr(af,"key",""))))
+            elif field=="duration_str":
+                item=SortItem(str(getattr(af,field,"")))
+                item.setData(_SORT_ROLE, float(af.duration))
+            elif field=="bitrate_str":
+                item=SortItem(str(getattr(af,field,"")))
+                item.setData(_SORT_ROLE, float(af.bitrate))
+            elif field=="sample_rate_str":
+                item=SortItem(str(getattr(af,field,"")))
+                item.setData(_SORT_ROLE, float(af.sample_rate))
+            elif field in self._NUMERIC_FIELDS:
+                val=str(getattr(af,field,""))
+                item=SortItem(val)
+                try:    item.setData(_SORT_ROLE, float(val))
+                except ValueError: item.setData(_SORT_ROLE, 0.0)
             else:
-                item=QTableWidgetItem(str(getattr(af,field,"")))
+                item=SortItem(str(getattr(af,field,"")))
             item.setData(Qt.ItemDataRole.UserRole,af)
             self.table.setItem(row,col,item)
 
@@ -2710,6 +2461,7 @@ class MainWindow(QMainWindow):
                 "Could not save:\n\n"+"\n".join(errors))
         else:
             self.statusBar().showMessage(f"✓  {len(files)} file(s) saved.")
+            self.nav._sync_genres_from_files(self.audio_files)
 
     def _save_sel(self): self._save_files(self._sel_files() or self.audio_files)
     def _save_all(self): self._save_files(self.audio_files)
@@ -2724,7 +2476,14 @@ class MainWindow(QMainWindow):
                 af=it.data(Qt.ItemDataRole.UserRole)
                 if af in self.audio_files: self.audio_files.remove(af)
             self.table.removeRow(row)
+        # Renumber the # column so it stays sequential
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, _NUM_COL)
+            if it:
+                it.setText(str(r+1)); it.setData(_SORT_ROLE, r+1)
+        self.nav.update_genre_counts(self.audio_files)
         self.tag_panel.load_files([]); self._update_status()
+        self._apply_filters()
 
     def _clear_all(self):
         self.audio_files.clear()
