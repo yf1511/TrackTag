@@ -31,6 +31,7 @@ from .audio_handler import AudioFile, SUPPORTED_EXTENSIONS
 from .cover_search import MetaSearchDialog
 from .batch_tag import BatchTagDialog
 from .player import PlayerBar
+from .convert import wav_to_aiff, move_to_trash, ConvertError
 from .updater import UpdateChecker
 from . import license as _lic
 
@@ -1208,6 +1209,30 @@ class TagPanel(QWidget):
         csv.addLayout(row1)
         self._btn_search_tags = bt
         self._btn_search_cover = bc
+
+        # WAV: Rekordbox ignores embedded artwork → offer AIFF
+        self._wav_hint = QPushButton("  Convert to AIFF for Rekordbox")
+        self._wav_hint.setToolTip(
+            "Rekordbox never shows artwork embedded in WAV files.\n"
+            "Converting to AIFF is lossless and keeps all tags.")
+        from PyQt6.QtWidgets import QSizePolicy
+        self._wav_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        try:
+            self._wav_hint.setIcon(_ico("fa5s.exchange-alt", C_ACCENT2))
+            self._wav_hint.setIconSize(QSize(11, 11))
+        except Exception:
+            pass
+        self._wav_hint.setFixedHeight(32)
+        self._wav_hint.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._wav_hint.setStyleSheet(
+            f"QPushButton{{background:rgba(245,158,11,0.10);color:{C_ACCENT2};"
+            f"border:1px solid rgba(245,158,11,0.28);border-radius:8px;"
+            f"font-size:11px;font-weight:500;text-align:left;padding-left:10px;}}"
+            f"QPushButton:hover{{background:rgba(245,158,11,0.18);}}")
+        self._wav_hint.clicked.connect(
+            lambda: getattr(self.window(), "_convert_to_aiff", lambda: None)())
+        self._wav_hint.hide()
+        csv.addWidget(self._wav_hint)
         if not _is_pro:
             bt.setToolTip("✦ Pro feature — upgrade to use")
             bc.setToolTip("✦ Pro feature — upgrade to use")
@@ -1358,8 +1383,10 @@ class TagPanel(QWidget):
             for w in self.fields.values():
                 (w.setCurrentText if isinstance(w,QComboBox) else w.setText)("")
             self.cover.clear_cover(); self.del_btn.hide(); self._set_enabled(False)
+            self._wav_hint.hide()
             self._loading = False; return
         self._set_enabled(True)
+        self._wav_hint.setVisible(any(f.extension == ".wav" for f in files))
         n = len(files)
         self._btn_search_tags.setText(f"  Auto-Tag {n}" if n > 1 else "  Search Tags")
         self._btn_search_cover.setText(f"  Find {n} Covers" if n > 1 else "  Find Cover")
@@ -1790,18 +1817,27 @@ class FileTable(QTableWidget):
 def _audio_paths_from_urls(urls) -> List[str]:
     return _audio_paths(urls)
 
+def _is_audio(name: str) -> bool:
+    # "._Track.mp3" are macOS metadata files on USB sticks / exFAT, not audio
+    return not name.startswith(".") and Path(name).suffix.lower() in SUPPORTED_EXTENSIONS
+
+
 def _audio_paths(urls) -> List[str]:
     paths=[]
     for url in urls:
         p=url.toLocalFile()
-        if os.path.isfile(p) and Path(p).suffix.lower() in SUPPORTED_EXTENSIONS:
+        if os.path.isfile(p) and _is_audio(os.path.basename(p)):
             paths.append(p)
         elif os.path.isdir(p):
-            for root,_,files in os.walk(p):
-                for name in files:
-                    if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS:
-                        paths.append(os.path.join(root,name))
+            paths += _walk_audio(p)
     return paths
+
+
+def _walk_audio(folder: str) -> List[str]:
+    return [os.path.join(root, name)
+            for root, dirs, files in os.walk(folder)
+            if not os.path.basename(root).startswith(".")
+            for name in sorted(files) if _is_audio(name)]
 
 
 def _missing_fields(af) -> List[str]:
@@ -2102,6 +2138,8 @@ class MainWindow(QMainWindow):
         self._act(em,"Clear List",       self._clear_all)
         em.addSeparator()
         self._act(em,"Fit Columns",      self._fit_cols,    "Ctrl+Shift+R")
+        em.addSeparator()
+        self._act(em,"Convert WAV to AIFF…", self._convert_to_aiff)
         sm=mb.addMenu("Search")
         self._act(sm,"Search Tags…",
             lambda: self.tag_panel._search("tags_only"),  "Ctrl+F")
@@ -2130,6 +2168,52 @@ class MainWindow(QMainWindow):
         dlg = BatchTagDialog(files, preset=preset, parent=self)
         dlg.applied.connect(self._on_auto_tagged)
         dlg.exec()
+
+    def _convert_to_aiff(self):
+        wavs = [f for f in self._sel_files() if f.extension == ".wav"]
+        if not wavs: return
+        n = len(wavs)
+        r = QMessageBox.question(self, "Convert to AIFF",
+            f"Convert {n} WAV file{'s' if n != 1 else ''} to AIFF?\n\n"
+            "The audio stays bit-for-bit identical. Tags, artwork and cue data are "
+            "carried over, and the WAV files are moved to the Trash.\n\n"
+            "Tracks already in Rekordbox: remove the old WAV entry and import the AIFF.",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Ok)
+        if r != QMessageBox.StandardButton.Ok: return
+
+        from PyQt6.QtWidgets import QProgressDialog
+        dlg = QProgressDialog("Converting…", "Cancel", 0, n * 100, self)
+        dlg.setWindowTitle("Convert to AIFF"); dlg.setMinimumDuration(0)
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        done, errors, kept = 0, [], []
+        for i, af in enumerate(wavs):
+            if dlg.wasCanceled(): break
+            dlg.setLabelText(f"Converting {i + 1} of {n}:  {af.filename}")
+            state = self.player_bar.release([af])
+            try:
+                new_path = wav_to_aiff(af, progress=lambda x, i=i: (
+                    dlg.setValue(i * 100 + int(x * 100)), QApplication.processEvents()))
+            except (ConvertError, OSError) as ex:
+                errors.append(f"{af.filename}: {ex}")
+                self.player_bar.resume(state); continue
+            if not move_to_trash(af.path):
+                kept.append(af.filename)
+            new = AudioFile(new_path)
+            idx = self.audio_files.index(af)
+            self.audio_files[idx] = new
+            if state:
+                self.player_bar.load(new)
+            done += 1
+        dlg.setValue(n * 100)
+        self._rebuild_table()
+        self._on_sel()          # the panel must point at the new AIFF files
+        msg = f"✓  Converted {done} file(s) to AIFF."
+        if kept: msg += f"  {len(kept)} WAV(s) could not be moved to the Trash."
+        self.statusBar().showMessage(msg)
+        if errors:
+            QMessageBox.warning(self, "Convert to AIFF",
+                f"{len(errors)} file(s) were not converted:\n\n" + "\n".join(errors))
 
     def _on_auto_tagged(self, files: list):
         for af in files: self._refresh_row(af)
@@ -2319,9 +2403,13 @@ class MainWindow(QMainWindow):
         unsaved=[f for f in self.audio_files if f._modified]
         if unsaved:
             r=QMessageBox.question(self,"Unsaved Changes",
-                f"{len(unsaved)} file(s) have unsaved changes.\nQuit anyway?",
-                QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
+                f"{len(unsaved)} file(s) have unsaved changes.\nSave them before quitting?",
+                QMessageBox.StandardButton.Save|QMessageBox.StandardButton.Discard
+                |QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Save)
             if r==QMessageBox.StandardButton.Cancel: e.ignore(); return
+            if r==QMessageBox.StandardButton.Save:
+                self._save_files(unsaved)
+                if any(f._modified for f in unsaved): e.ignore(); return   # a save failed
         if getattr(self, "_update_checker", None) is not None:
             self._update_checker.shutdown()
         threads = (
@@ -2348,11 +2436,7 @@ class MainWindow(QMainWindow):
     def _open_folder(self):
         folder=QFileDialog.getExistingDirectory(self,"Open Folder")
         if not folder: return
-        paths=[]
-        for root,_,files in os.walk(folder):
-            for name in files:
-                if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS:
-                    paths.append(os.path.join(root,name))
+        paths=_walk_audio(folder)
         if paths: self._add_files(paths)
 
     def _sync_genres(self):
@@ -2408,6 +2492,8 @@ class MainWindow(QMainWindow):
                 item.setData(TrackDelegate.SUBTITLE_ROLE, _subtitle(tv))
             elif field=="key":
                 item=SortItem(normalize_key(str(getattr(af,"key",""))))
+                cam=_RB_TO_CAMELOT.get(key_to_musical(str(getattr(af,"key",""))))
+                if cam: item.setData(_SORT_ROLE, int(cam[:-1])*2 + (cam[-1]=="B"))
             elif field=="duration_str":
                 item=SortItem(str(getattr(af,field,"")))
                 item.setData(_SORT_ROLE, float(af.duration))
@@ -2530,6 +2616,11 @@ class MainWindow(QMainWindow):
             act_tags.setText(act_tags.text().rstrip("…") + "  [Pro]")
             act_cover.setText(act_cover.text().rstrip("…") + "  [Pro]")
         menu.addSeparator()
+        n_wav = sum(1 for f in sel if f.extension == ".wav")
+        if n_wav:
+            menu.addAction(f"Convert {n_wav} WAV to AIFF (for Rekordbox)…" if n_wav > 1
+                           else "Convert WAV to AIFF (for Rekordbox)…").triggered.connect(
+                self._convert_to_aiff)
         menu.addAction("Rename Files from Tags").triggered.connect(self.tag_panel._rename)
         menu.addSeparator()
         menu.addAction("Remove from List").triggered.connect(self._remove_sel)

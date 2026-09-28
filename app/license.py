@@ -180,11 +180,11 @@ def verify_background() -> bool:
 
     if resp is None:
         # Server unerreichbar — Offline-Toleranz prüfen
+        # Keep the key file either way: if the server is down for longer than
+        # the grace period, Pro pauses but comes back once it's reachable —
+        # the user never has to re-enter the key.
         last = data.get("last_verified", 0)
-        if time.time() - last < _OFFLINE_GRACE:
-            return True   # Noch innerhalb der Gnadenfrist
-        _clear()
-        return False
+        return time.time() - last < _OFFLINE_GRACE
 
     if resp.get("ok") and resp.get("active"):
         # Letzten Verify-Zeitstempel aktualisieren

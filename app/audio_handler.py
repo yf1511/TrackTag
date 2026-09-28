@@ -1,4 +1,7 @@
 import os
+import shutil
+import struct
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +32,117 @@ def _id3_str(tags, key):
 
 def _year_only(value: str) -> str:
     return value.split('T')[0].split('-')[0].strip()
+
+
+# ── RIFF INFO (WAV) ───────────────────────────────────────────────────────────
+# Rekordbox ignores ID3 inside WAV and only reads the RIFF LIST/INFO chunk, so
+# WAV files get both: ID3 (Serato, Traktor, Finder) and INFO (Rekordbox).
+
+_INFO_FIELDS = (('INAM', 'title'), ('IART', 'artist'), ('IPRD', 'album'),
+                ('IGNR', 'genre'), ('ICRD', 'year'), ('ICMT', 'comment'),
+                ('ITRK', 'track'))
+
+
+def _riff_chunks(f):
+    """Yield (id, data_offset, size) for every top-level chunk of a RIFF/WAVE file."""
+    f.seek(0)
+    hdr = f.read(12)
+    if len(hdr) < 12 or hdr[:4] != b'RIFF' or hdr[8:12] != b'WAVE':
+        return
+    end = min(struct.unpack('<I', hdr[4:8])[0] + 8, os.fstat(f.fileno()).st_size)
+    pos = 12
+    while pos + 8 <= end:
+        f.seek(pos)
+        cid, size = struct.unpack('<4sI', f.read(8))
+        yield cid, pos + 8, size
+        pos += 8 + size + (size & 1)
+
+
+def _parse_info(data: bytes) -> list:
+    out, i = [], 4                       # skip b'INFO'
+    while i + 8 <= len(data):
+        sid, size = struct.unpack('<4sI', data[i:i+8])
+        out.append((sid, data[i+8:i+8+size]))
+        i += 8 + size + (size & 1)
+    return out
+
+
+def _decode(raw: bytes) -> str:
+    raw = raw.split(b'\x00', 1)[0]
+    try:
+        return raw.decode('utf-8')
+    except UnicodeDecodeError:
+        return raw.decode('latin-1')
+
+
+def read_riff_info(path: str) -> dict:
+    try:
+        with open(path, 'rb') as f:
+            for cid, off, size in _riff_chunks(f):
+                if cid == b'LIST':
+                    f.seek(off); data = f.read(size)
+                    if data[:4] == b'INFO':
+                        names = dict((k.encode(), v) for k, v in _INFO_FIELDS)
+                        return {names[sid]: _decode(v) for sid, v in _parse_info(data)
+                                if sid in names and _decode(v).strip()}
+    except OSError:
+        pass
+    return {}
+
+
+def write_riff_info(path: str, values: dict):
+    """Replace the managed INFO fields (others such as ISFT are kept)."""
+    managed = {k.encode() for k, _ in _INFO_FIELDS}
+    with open(path, 'rb') as src:
+        chunks = list(_riff_chunks(src))
+        if not chunks:
+            return
+        old = []
+        for cid, off, size in chunks:
+            if cid == b'LIST':
+                src.seek(off)
+                if src.read(4) == b'INFO':
+                    src.seek(off); old = _parse_info(src.read(size))
+        subs = [(sid, v) for sid, v in old if sid not in managed]
+        for k, field in _INFO_FIELDS:
+            v = str(values.get(field, '') or '').strip()
+            if v:
+                subs.append((k.encode(), v.encode('utf-8') + b'\x00'))
+        body = b'INFO' + b''.join(
+            struct.pack('<4sI', sid, len(v)) + v + (b'\x00' if len(v) & 1 else b'')
+            for sid, v in subs)
+        info = struct.pack('<4sI', b'LIST', len(body)) + body if len(subs) else b''
+
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as dst:
+                dst.write(b'RIFF\x00\x00\x00\x00WAVE')
+                placed = False
+                for cid, off, size in chunks:
+                    if cid == b'LIST':
+                        src.seek(off)
+                        if src.read(4) == b'INFO':
+                            if not placed:          # new INFO where the old one was
+                                dst.write(info); placed = True
+                            continue
+                    src.seek(off - 8)
+                    _copy(src, dst, 8 + size + (size & 1))
+                if not placed:
+                    dst.write(info)
+                riff_size = dst.tell() - 8
+                dst.seek(4); dst.write(struct.pack('<I', riff_size))
+            shutil.copymode(path, tmp)
+            os.replace(tmp, path)
+        except Exception:
+            if os.path.exists(tmp): os.remove(tmp)
+            raise
+
+
+def _copy(src, dst, n: int):
+    while n > 0:
+        buf = src.read(min(n, 1 << 20))
+        if not buf: break
+        dst.write(buf); n -= len(buf)
 
 
 class AudioFile:
@@ -149,6 +263,10 @@ class AudioFile:
         self.sample_rate = audio.info.sample_rate
         if audio.tags:
             self._load_id3_tags(audio.tags)
+        # Fill gaps from RIFF INFO (what Rekordbox and many DAWs write)
+        for field, value in read_riff_info(self.path).items():
+            if not getattr(self, field):
+                setattr(self, field, _year_only(value) if field == 'year' else value)
 
     def _load_aiff(self):
         audio = AIFF(self.path)
@@ -259,9 +377,12 @@ class AudioFile:
             except Exception:
                 pass
             img = Image.open(io.BytesIO(self.cover_data))
-            # Already a JPEG within the size limit → keep the original bytes
-            # (re-encoding on every save would slowly degrade the artwork)
-            if img.format == 'JPEG' and img.mode == 'RGB' and not (max_px and max(img.size) > max_px):
+            # Already a baseline JPEG within the size limit → keep the original
+            # bytes (re-encoding on every save would slowly degrade the artwork).
+            # Progressive JPEGs are re-encoded: CDJs and Rekordbox can't show them.
+            progressive = img.info.get('progressive') or img.info.get('progression')
+            if (img.format == 'JPEG' and img.mode == 'RGB' and not progressive
+                    and not (max_px and max(img.size) > max_px)):
                 self.cover_mime = 'image/jpeg'
                 return
             if img.mode not in ('RGB',):
@@ -269,7 +390,7 @@ class AudioFile:
             if max_px and max(img.size) > max_px:
                 img.thumbnail((max_px, max_px), Image.LANCZOS)
             buf = io.BytesIO()
-            img.save(buf, format='JPEG', quality=92, optimize=True)
+            img.save(buf, format='JPEG', quality=92, optimize=True, progressive=False)
             self.cover_data = buf.getvalue()
             self.cover_mime = 'image/jpeg'
         except Exception as e:
@@ -354,7 +475,9 @@ class AudioFile:
         # Rekordbox enforces this for WAV files (more lenient for MP3)
         self._apply_id3_tags(audio.tags, encoding=1)
         audio.tags.update_to_v23()
-        audio.save(v2_version=3)      # strict ID3v2.3 for Rekordbox
+        audio.save(v2_version=3)
+        # Rekordbox only reads RIFF INFO in WAV files
+        write_riff_info(self.path, {f: getattr(self, f) for _, f in _INFO_FIELDS})
 
     def _save_aiff(self):
         self._normalize_cover()

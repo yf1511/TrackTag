@@ -137,10 +137,11 @@ def _launch_swap_helper(staged_app: str, target_app: str):
     Spawn a detached shell script that waits for this process to exit,
     replaces the installed bundle with the staged one and relaunches it.
     """
+    import shlex
     script = f'''#!/bin/bash
 PID={os.getpid()}
-NEW="{staged_app}"
-OLD="{target_app}"
+NEW={shlex.quote(staged_app)}
+OLD={shlex.quote(target_app)}
 BAK="$OLD.old"
 while kill -0 $PID 2>/dev/null; do sleep 0.3; done
 rm -rf "$BAK"
