@@ -150,50 +150,120 @@ def _tidy_artist(artist: str, title: str, query: str) -> str:
     return ", ".join(sorted(names, key=pos))
 
 
+# ── Ranking ───────────────────────────────────────────────────────────────────
+
+def rank_results(results: dict, q: str, duration: float) -> list:
+    """Score, tidy and sort results (uids); sets r['_score'] and r['_match']."""
+    seen, ranked = set(), []
+    for uid, r in results.items():
+        k = (r["source"], r["artist"].lower(), r["title"].lower(),
+             (r["label"] or r["album"]).lower(), r["year"])
+        if k in seen: continue
+        seen.add(k)
+        if r["source"] == "beatport":
+            r["artist"] = _tidy_artist(r["artist"], r["title"], q)
+        r["_score"] = _score(r, q, duration) - (0.05 if r.get("compilation") else 0)
+        r["_match"] = _is_match(r, q)
+        ranked.append(uid)
+    # Beatport first on ties (richer DJ data)
+    ranked.sort(key=lambda u: (not results[u]["_match"],
+                               -results[u]["_score"],
+                               results[u]["source"] != "beatport"))
+    return ranked
+
+
+def best_match(results: dict, ranked: list) -> Optional[dict]:
+    """Merge all confident matches of the same track into one result."""
+    matches = [results[u] for u in ranked if results[u]["_match"]]
+    if not matches:
+        return None
+    top = matches[0]
+    # Same track = same base title and same version (Original ≡ none)
+    same_base, top_v = _core(_tokens(_base_title(top["title"]))), _vkey(top["title"])
+    same = [m for m in matches
+            if _core(_tokens(_base_title(m["title"]))) == same_base
+            and _vkey(m["title"]) == top_v]
+
+    bp = [m for m in same if m["source"] == "beatport"]
+    # Original release: not a compilation, then earliest year
+    bp.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
+    it = [m for m in same if m["source"] == "itunes"]
+    it.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
+    primary = bp[0] if bp else top
+
+    best = dict(primary)
+    years = [m["year"] for m in same if m["year"]]
+    if years: best["year"] = min(years)
+    for f in ("genre", "label", "album", "bpm", "key"):
+        if not best.get(f):
+            for m in bp + it:
+                if m.get(f): best[f] = m[f]; break
+    best["_sources"] = sorted({m["source"] for m in same}, key=lambda s: s != "beatport")
+    if not best.get("cover_url") and it:
+        best["cover_url"], best["thumb"] = it[0]["cover_url"], it[0]["thumb"]
+    best["_primary"] = next((u for u, r in results.items() if r is primary), None)
+    best["_best"] = True
+    best["_match"] = True
+    return best
+
+
 # ── Workers ───────────────────────────────────────────────────────────────────
+
+def search_itunes(q: str) -> list:
+    try:
+        enc = urllib.parse.quote(q)
+        req = urllib.request.Request(
+            f"https://itunes.apple.com/search?term={enc}&entity=song&limit=10",
+            headers={"User-Agent": _UA})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        out = []
+        for it in data.get("results", []):
+            t = it.get("artworkUrl100", "")
+            out.append({
+                "source": "itunes",
+                "artist": it.get("artistName", ""),
+                "title":  it.get("trackName", ""),
+                "album":  it.get("collectionName", ""),
+                "genre":  it.get("primaryGenreName", ""),
+                "label":  "",
+                "year":   it.get("releaseDate", "")[:4],
+                "bpm": "", "key": "",
+                "length": (it.get("trackTimeMillis") or 0) / 1000,
+                "thumb":     t.replace("100x100bb", "200x200bb"),
+                "cover_url": t.replace("100x100bb", f"{COVER_PX}x{COVER_PX}bb"),
+                "compilation": it.get("collectionArtistName", "") == "Various Artists",
+            })
+        return out
+    except Exception as e:
+        print(f"iTunes: {e}"); return []
+
+
+def search_beatport(q: str) -> list:
+    try:
+        return _Beatport(q).search()
+    except Exception as e:
+        print(f"Beatport: {e}"); return []
+
 
 class _iTunesWorker(QThread):
     done = pyqtSignal(list)
     def __init__(self, q): super().__init__(); self.q = q
-    def run(self):
-        try:
-            enc = urllib.parse.quote(self.q)
-            req = urllib.request.Request(
-                f"https://itunes.apple.com/search?term={enc}&entity=song&limit=10",
-                headers={"User-Agent": _UA})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read())
-            out = []
-            for it in data.get("results", []):
-                t = it.get("artworkUrl100", "")
-                out.append({
-                    "source": "itunes",
-                    "artist": it.get("artistName", ""),
-                    "title":  it.get("trackName", ""),
-                    "album":  it.get("collectionName", ""),
-                    "genre":  it.get("primaryGenreName", ""),
-                    "label":  "",
-                    "year":   it.get("releaseDate", "")[:4],
-                    "bpm": "", "key": "",
-                    "length": (it.get("trackTimeMillis") or 0) / 1000,
-                    "thumb":     t.replace("100x100bb", "200x200bb"),
-                    "cover_url": t.replace("100x100bb", f"{COVER_PX}x{COVER_PX}bb"),
-                    "compilation": it.get("collectionArtistName", "") == "Various Artists",
-                })
-            self.done.emit(out)
-        except Exception as e:
-            print(f"iTunes: {e}"); self.done.emit([])
+    def run(self): self.done.emit(search_itunes(self.q))
 
 
 class _BeatportWorker(QThread):
     done = pyqtSignal(list)
     def __init__(self, q): super().__init__(); self.q = q
+    def run(self): self.done.emit(search_beatport(self.q))
 
-    def run(self):
-        try:
-            self.done.emit(self._scrape())
-        except Exception as e:
-            print(f"Beatport: {e}"); self.done.emit([])
+
+class _Beatport:
+    """Beatport search (scrapes the public search page)."""
+    def __init__(self, q): self.q = q
+
+    def search(self) -> list:
+        return self._scrape()
 
     @staticmethod
     def _art(uri: str, size: int) -> str:
@@ -657,57 +727,10 @@ class MetaSearchDialog(QDialog):
     # ── ranking ───────────────────────────────────────────────────────────────
 
     def _rank(self):
-        q = self._query
-        seen, ranked = set(), []
-        for uid, r in self._results.items():
-            k = (r["source"], r["artist"].lower(), r["title"].lower(),
-                 (r["label"] or r["album"]).lower(), r["year"])
-            if k in seen: continue
-            seen.add(k)
-            if r["source"] == "beatport":
-                r["artist"] = _tidy_artist(r["artist"], r["title"], q)
-            r["_score"] = _score(r, q, self._duration) - (0.05 if r.get("compilation") else 0)
-            r["_match"] = _is_match(r, q)
-            ranked.append(uid)
-        # Beatport first on ties (richer DJ data)
-        ranked.sort(key=lambda u: (not self._results[u]["_match"],
-                                   -self._results[u]["_score"],
-                                   self._results[u]["source"] != "beatport"))
-        return ranked
+        return rank_results(self._results, self._query, self._duration)
 
     def _best_match(self, ranked: list) -> Optional[dict]:
-        """Merge all confident matches of the same track into one result."""
-        matches = [self._results[u] for u in ranked if self._results[u]["_match"]]
-        if not matches:
-            return None
-        top = matches[0]
-        # Same track = same base title and same version (Original ≡ none)
-        same_base, top_v = _core(_tokens(_base_title(top["title"]))), _vkey(top["title"])
-        same = [m for m in matches
-                if _core(_tokens(_base_title(m["title"]))) == same_base
-                and _vkey(m["title"]) == top_v]
-
-        bp = [m for m in same if m["source"] == "beatport"]
-        # Original release: not a compilation, then earliest year
-        bp.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
-        it = [m for m in same if m["source"] == "itunes"]
-        it.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
-        primary = bp[0] if bp else top
-
-        best = dict(primary)
-        years = [m["year"] for m in same if m["year"]]
-        if years: best["year"] = min(years)
-        for f in ("genre", "label", "album", "bpm", "key"):
-            if not best.get(f):
-                for m in bp + it:
-                    if m.get(f): best[f] = m[f]; break
-        best["_sources"] = sorted({m["source"] for m in same}, key=lambda s: s != "beatport")
-        if not best.get("cover_url") and it:
-            best["cover_url"], best["thumb"] = it[0]["cover_url"], it[0]["thumb"]
-        best["_primary"] = next((u for u, r in self._results.items() if r is primary), None)
-        best["_best"] = True
-        best["_match"] = True
-        return best
+        return best_match(self._results, ranked)
 
     def _rebuild(self):
         ranked = self._rank()

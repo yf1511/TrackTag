@@ -55,6 +55,7 @@ a = Analysis(
         "app.cover_search",
         "app.updater",
         "app.theme",
+        "app.batch_tag",
     ] + qta_hiddenimports + qt_hidden + mutagen_hidden,
     hookspath=[],
     hooksconfig={},

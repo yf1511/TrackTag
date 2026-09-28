@@ -31,6 +31,7 @@ _SETTINGS = lambda: QSettings("TrackTag", "TrackTag")
 
 from .audio_handler import AudioFile, SUPPORTED_EXTENSIONS
 from .cover_search import MetaSearchDialog
+from .batch_tag import BatchTagDialog
 from .updater import UpdateChecker
 from . import license as _lic
 
@@ -158,41 +159,66 @@ _KEY_NORM = {
     "abm":"Abm", "am":"Am",    "bbm":"Bbm",  "bm":"Bm",
 }
 
-# Camelot-wheel hue order — one color per note (minor = deep, major = lighter)
+_RB_TO_CAMELOT = {v: k for k, v in _CAMELOT_TO_RB.items()}
+_RB_TO_CAMELOT.update({   # enharmonic spellings produced by _KEY_NORM
+    "C#m":"12A", "C#":"3B", "G#m":"1A", "G#":"4B", "D#m":"2A", "D#":"5B",
+    "A#m":"3A", "A#":"6B", "Gbm":"11A", "Gb":"2B",
+})
+
+def _key_color(n: int, minor: bool) -> str:
+    """One hue per Camelot number (like the wheel); minor deeper, major lighter."""
+    import colorsys
+    r, g, b = colorsys.hls_to_rgb(((n - 1) * 30 % 360) / 360,
+                                  0.58 if minor else 0.70, 0.62)
+    return f"#{int(r*255):02x}{int(g*255):02x}{int(b*255):02x}"
+
+# Camelot-wheel hue order — keyed by musical name
 KEY_COLORS: dict[str, str] = {
-    "Am":"#e05252", "A":"#ff8585",
-    "Em":"#e07040", "E":"#ff9966",
-    "Bm":"#e09930", "B":"#ffc055",
-    "F#m":"#c8b800","F#":"#e8d840",
-    "Dbm":"#8ec820","Db":"#aadd44",
-    "Abm":"#3ab83a","Ab":"#5dd85d",
-    "Ebm":"#30b87a","Eb":"#50d898",
-    "Bbm":"#2898c0","Bb":"#44b8e0",
-    "Fm":"#3060d8", "F":"#5585ff",
-    "Cm":"#5550d0", "C":"#7878ff",
-    "Gm":"#8840d0", "G":"#aa66ee",
-    "Dm":"#c030a0", "D":"#e055cc",
-    # enharmonic aliases
-    "C#m":"#e07040","C#":"#ff9966",
-    "D#m":"#c8b800","D#":"#e8d840",
-    "G#m":"#3ab83a","G#":"#5dd85d",
-    "A#m":"#2898c0","A#":"#44b8e0",
+    rb: _key_color(int(cam[:-1]), cam.endswith("A")) for rb, cam in _RB_TO_CAMELOT.items()
 }
 
-def normalize_key(s: str) -> str:
-    """Convert any key notation (Beatport, Camelot, Open Key…) to Rekordbox short form."""
+KEY_FORMATS = {"musical": "Musical  (Am, F#)", "camelot": "Camelot  (8A, 2B)",
+               "openkey": "Open Key  (1m, 7d)"}
+_key_format = _SETTINGS().value("key_format", "musical", str) or "musical"
+
+
+def set_key_format(fmt: str):
+    global _key_format
+    _key_format = fmt if fmt in KEY_FORMATS else "musical"
+    _SETTINGS().setValue("key_format", _key_format)
+
+
+def key_to_musical(s: str) -> str:
+    """Any notation (Beatport, Camelot, Open Key, musical) → Rekordbox short form."""
     if not s: return ""
     s = s.strip()
     # Camelot wheel: "11A", "6B"
     m = re.match(r'^(\d{1,2})([AB])$', s, re.IGNORECASE)
     if m:
         return _CAMELOT_TO_RB.get(f"{m.group(1)}{m.group(2).upper()}", s)
+    # Open Key: "1m" = Am (8A), "1d" = C (8B)
+    m = re.match(r'^(\d{1,2})([md])$', s, re.IGNORECASE)
+    if m and 1 <= int(m.group(1)) <= 12:
+        cam = (int(m.group(1)) + 6) % 12 + 1
+        return _CAMELOT_TO_RB.get(f"{cam}{'A' if m.group(2).lower() == 'm' else 'B'}", s)
     # Normalise lookup key: strip spaces, lowercase, expand maj/min words
     lk = re.sub(r'\s+', '', s.lower())
     lk = lk.replace("major", "maj").replace("minor", "min")
     lk = lk.replace("maj.", "maj").replace("min.", "min")
     lk = lk.replace("mj", "maj").replace("mn", "min")
     return _KEY_NORM.get(lk, s)
+
+
+def normalize_key(s: str) -> str:
+    """Convert any key notation to the format chosen in Settings."""
+    mus = key_to_musical(s)
+    if _key_format == "musical" or mus not in _RB_TO_CAMELOT:
+        return mus
+    cam = _RB_TO_CAMELOT[mus]
+    if _key_format == "camelot":
+        return cam
+    n, letter = int(cam[:-1]), cam[-1]
+    return f"{(n - 8) % 12 + 1}{'m' if letter == 'A' else 'd'}"
 
 
 # ── Genre presets ─────────────────────────────────────────────────────────────
@@ -405,7 +431,7 @@ class TrackDelegate(QStyledItemDelegate):
 
         elif col == _KEY_COL:
             if text:
-                kc = QColor(KEY_COLORS.get(text, C_KEY_CLR))
+                kc = QColor(KEY_COLORS.get(key_to_musical(text), C_KEY_CLR))
                 f = QFont(base); f.setPixelSize(11); f.setWeight(QFont.Weight.DemiBold)
                 painter.setFont(f)
                 w = painter.fontMetrics().horizontalAdvance(text) + 16
@@ -1324,6 +1350,9 @@ class TagPanel(QWidget):
             self.cover.clear_cover(); self._set_enabled(False)
             self._loading = False; return
         self._set_enabled(True)
+        n = len(files)
+        self._btn_search_tags.setText(f"  Auto-Tag {n}" if n > 1 else "  Search Tags")
+        self._btn_search_cover.setText(f"  Find {n} Covers" if n > 1 else "  Find Cover")
         if len(files) == 1:
             f = files[0]
             for field, w in self.fields.items():
@@ -1391,6 +1420,9 @@ class TagPanel(QWidget):
             self._show_pro_prompt()
             return
         if not self._files: return
+        if len(self._files) > 1 and hasattr(self.window(), "_auto_tag"):
+            self.window()._auto_tag(preset)
+            return
         f=self._files[0]
         artist, title = f.artist.strip(), f.title.strip()
         if not title:   # untagged file: search by its name
@@ -1507,7 +1539,7 @@ class SettingsDialog(QDialog):
                 padding:6px 16px;font-size:12px;font-weight:600;
                 margin-right:2px;
             }}
-            QTabBar::tab:selected {{background:{C_PRIMARY};color:#fff;border-color:{C_PRIMARY};}}
+            QTabBar::tab:selected {{background:{C_SURFACE3};color:{C_TEXT};border-color:{C_BORDER2};}}
             QTabWidget::pane {{
                 border:1px solid {C_BORDER};border-radius:0 8px 8px 8px;
                 background:{C_SURFACE2};
@@ -1543,20 +1575,9 @@ class SettingsDialog(QDialog):
         root.addWidget(tabs, 1)
 
         # Close button
-        close = QPushButton("Close")
-        close.setFixedHeight(40)
-        close.setStyleSheet(f"""
-            QPushButton{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_PRIMARY},stop:1 {C_ACCENT});
-                color:#fff;border:none;border-radius:10px;
-                font-size:13px;font-weight:700;
-            }}
-            QPushButton:hover{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #9d74f8,stop:1 #f062ab);
-            }}
-        """)
+        close = QPushButton("Done")
+        close.setFixedHeight(38)
+        close.setStyleSheet(_BTN_PRIMARY)
         close.clicked.connect(self.accept)
         root.addWidget(close)
 
@@ -1640,6 +1661,21 @@ class SettingsDialog(QDialog):
         cov_hint = QLabel("Covers are converted to JPEG on save (required by Rekordbox).")
         cov_hint.setStyleSheet(f"color:{C_TEXT3};font-size:10px;padding-left:172px;")
         v.addWidget(cov_hint)
+        v.addSpacing(6)
+
+        v.addWidget(self._section("KEY NOTATION"))
+        v.addSpacing(2)
+        key_combo = QComboBox()
+        for code, label in KEY_FORMATS.items():
+            key_combo.addItem(label, code)
+        key_combo.setCurrentIndex(max(0, key_combo.findData(_key_format)))
+        key_combo.setFixedHeight(34); key_combo.setStyleSheet(_COMBO)
+        key_combo.currentIndexChanged.connect(
+            lambda i: set_key_format(key_combo.itemData(i)))
+        v.addLayout(self._field_row("Key Format", key_combo))
+        key_hint = QLabel("Used in the track list and when keys are written to files.")
+        key_hint.setStyleSheet(f"color:{C_TEXT3};font-size:10px;padding-left:172px;")
+        v.addWidget(key_hint)
         v.addSpacing(6)
 
         v.addWidget(self._section("TAG FORMAT"))
@@ -1738,6 +1774,14 @@ def _audio_paths(urls) -> List[str]:
                     if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS:
                         paths.append(os.path.join(root,name))
     return paths
+
+
+def _missing_fields(af) -> List[str]:
+    """DJ essentials a track is missing (used by the Incomplete filter)."""
+    out = [f for f in ("bpm", "key", "genre") if not str(getattr(af, f, "") or "").strip()]
+    if not af.cover_data:
+        out.append("cover")
+    return out
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
@@ -1865,9 +1909,16 @@ class MainWindow(QMainWindow):
         self._bpm_btn.setStyleSheet(_pill_style)
         self._bpm_btn.clicked.connect(self._pick_bpm_filter)
 
+        self._incomplete_btn = QPushButton("Incomplete"); self._incomplete_btn.setFixedHeight(28)
+        self._incomplete_btn.setCheckable(True)
+        self._incomplete_btn.setToolTip("Tracks missing BPM, key, genre or artwork")
+        self._incomplete_btn.setStyleSheet(_pill_style)
+        self._incomplete_btn.toggled.connect(lambda _: (self._sync_all_pill(), self._apply_filters()))
+
         fbl.addWidget(self._all_btn)
         fbl.addWidget(self._genre_btn)
         fbl.addWidget(self._bpm_btn)
+        fbl.addWidget(self._incomplete_btn)
 
         # Table
         self.table = FileTable()
@@ -2018,6 +2069,8 @@ class MainWindow(QMainWindow):
             lambda: self.tag_panel._search("tags_only"),  "Ctrl+F")
         self._act(sm,"Cover Only…",
             lambda: self.tag_panel._search("cover_only"), "Ctrl+Shift+F")
+        sm.addSeparator()
+        self._act(sm,"Auto-Tag Selection…", self._auto_tag, "Ctrl+Shift+T")
 
     @staticmethod
     def _act(menu, label, slot, sc=None):
@@ -2027,9 +2080,35 @@ class MainWindow(QMainWindow):
 
     # ── Player controls ───────────────────────────────────────────────────────
 
+    def _auto_tag(self, preset: str = "all"):
+        if not _is_pro:
+            self.tag_panel._show_pro_prompt(); return
+        files = self._sel_files()
+        if not files:
+            files = [self.table.item(r, _NUM_COL).data(Qt.ItemDataRole.UserRole)
+                     for r in range(self.table.rowCount())
+                     if not self.table.isRowHidden(r) and self.table.item(r, _NUM_COL)]
+        if not files: return
+        dlg = BatchTagDialog(files, preset=preset, parent=self)
+        dlg.applied.connect(self._on_auto_tagged)
+        dlg.exec()
+
+    def _on_auto_tagged(self, files: list):
+        for af in files: self._refresh_row(af)
+        self._sync_genres()
+        self._apply_filters()
+        self._on_sel()
+        if files:
+            self.statusBar().showMessage(
+                f"✓  Updated {len(files)} track(s) — press ⌘⇧S to save all.")
+
     def _open_settings(self):
+        fmt = _key_format
         dlg = SettingsDialog(self)
         dlg.exec()
+        if _key_format != fmt:      # re-render keys in the new notation
+            self._rebuild_table()
+            self._on_sel()
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -2054,12 +2133,16 @@ class MainWindow(QMainWindow):
         self._active_bpm_max = None
         self._genre_btn.setText("Genre  ▾")
         self._bpm_btn.setText("BPM  ▾")
+        self._incomplete_btn.blockSignals(True)
+        self._incomplete_btn.setChecked(False)
+        self._incomplete_btn.blockSignals(False)
         self._all_btn.setChecked(True)
         self._apply_filters()
 
     def _sync_all_pill(self):
         self._all_btn.setChecked(
-            self._active_genre_filter is None and self._active_bpm_min is None)
+            self._active_genre_filter is None and self._active_bpm_min is None
+            and not self._incomplete_btn.isChecked())
 
     def _genre_filter(self, genre: Optional[str], btn: QPushButton = None):
         self._active_genre_filter = genre
@@ -2153,6 +2236,10 @@ class MainWindow(QMainWindow):
                 except ValueError:
                     bpm = 0
                 match = (bpm_min <= bpm <= bpm_max)
+
+            # Incomplete: missing any of the DJ essentials
+            if match and self._incomplete_btn.isChecked() and af:
+                match = _missing_fields(af) != []
 
             self.table.setRowHidden(row, not match)
 
@@ -2367,21 +2454,22 @@ class MainWindow(QMainWindow):
 
     def _context_menu(self, pos):
         sel=self._sel_files(); menu=QMenu(self)
-        menu.addAction(f"  Quick Look  Space").triggered.connect(
+        menu.addAction("Quick Look  Space").triggered.connect(
             lambda: _quick_look(sel[0].path) if sel else None)
-        menu.addAction(f"  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
+        menu.addAction(f"Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
         menu.addSeparator()
-        act_tags = menu.addAction("  Search Tags…")
+        multi = len(sel) > 1
+        act_tags = menu.addAction(f"Auto-Tag {len(sel)} Tracks…" if multi else "Search Tags…")
         act_tags.triggered.connect(lambda: self.tag_panel._search("tags_only"))
-        act_cover = menu.addAction("  Cover Only…")
+        act_cover = menu.addAction(f"Find {len(sel)} Covers…" if multi else "Find Cover…")
         act_cover.triggered.connect(lambda: self.tag_panel._search("cover_only"))
         if not _is_pro:
-            act_tags.setText("  Search Tags  [Pro]")
-            act_cover.setText("  Cover Only  [Pro]")
+            act_tags.setText(act_tags.text().rstrip("…") + "  [Pro]")
+            act_cover.setText(act_cover.text().rstrip("…") + "  [Pro]")
         menu.addSeparator()
-        menu.addAction("  Rename").triggered.connect(self.tag_panel._rename)
+        menu.addAction("Rename Files from Tags").triggered.connect(self.tag_panel._rename)
         menu.addSeparator()
-        menu.addAction("  Remove from List").triggered.connect(self._remove_sel)
+        menu.addAction("Remove from List").triggered.connect(self._remove_sel)
         menu.exec(self.table.mapToGlobal(pos))
 
     # ── Drag & drop ───────────────────────────────────────────────────────────
