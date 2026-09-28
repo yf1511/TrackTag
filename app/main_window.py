@@ -32,6 +32,8 @@ from .cover_search import MetaSearchDialog
 from .batch_tag import BatchTagDialog
 from .player import PlayerBar
 from .convert import wav_to_aiff, move_to_trash, ConvertError
+from .filename_tags import FilenameTagsDialog
+from . import quality as _quality
 from .updater import UpdateChecker
 from . import license as _lic
 
@@ -255,12 +257,13 @@ COLUMNS = [
     ("comment",     "COMMENT"),
     ("composer",    "COMPOSER"),
     ("sample_rate_str","SAMPLERATE"),
+    ("_quality",    "QUALITY"),
 ]
 _DEFAULT_COL_W = {
     "title": 260, "artist": 190, "album": 160, "genre": 140, "label": 140,
     "bpm": 64, "key": 72, "year": 64, "bitrate_str": 84, "duration_str": 72,
     "filename": 260, "album_artist": 160, "track": 64, "comment": 180,
-    "composer": 150, "sample_rate_str": 96,
+    "composer": 150, "sample_rate_str": 96, "_quality": 140,
 }
 
 _NUM_COL   = 0
@@ -269,6 +272,17 @@ _TITLE_COL = 2
 _GENRE_COL = 5
 _BPM_COL   = 7
 _KEY_COL   = 8
+_QUALITY_COL = len(COLUMNS) - 1
+_QUALITY_ROLE = Qt.ItemDataRole.UserRole + 3
+# fake → suspect → low bitrate → fine → not checked (for sorting / chips)
+_Q_ORDER = {"fake": 0, "suspect": 1, "ok": 2, "good": 3, "unknown": 4}
+_Q_STYLE = {
+    "fake":    ("#f87171", "rgba(248,113,113,0.16)"),
+    "suspect": ("#fbbf24", "rgba(251,191,36,0.15)"),
+    "ok":      ("#9b9dab", "rgba(155,157,171,0.12)"),
+    "good":    ("#4ade80", "rgba(74,222,128,0.12)"),
+    "unknown": ("#5d606e", "rgba(93,96,110,0.12)"),
+}
 
 # ── Shared styles ─────────────────────────────────────────────────────────────
 
@@ -438,6 +452,24 @@ class TrackDelegate(QStyledItemDelegate):
             else:
                 painter.drawText(r, Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,
                     fm.elidedText(text, Qt.TextElideMode.ElideRight, r.width()))
+
+        elif col == _QUALITY_COL:
+            st = index.data(_QUALITY_ROLE)
+            if st and text:
+                fg, bg = _Q_STYLE.get(st, _Q_STYLE["unknown"])
+                f = QFont(base); f.setPixelSize(11); f.setWeight(QFont.Weight.DemiBold)
+                painter.setFont(f)
+                w = min(r.width(), painter.fontMetrics().horizontalAdvance(text) + 18)
+                chip = QRect(r.left(), rect.center().y()-10, w, 20)
+                painter.setPen(Qt.PenStyle.NoPen)
+                c = QColor(bg) if not bg.startswith("rgba") else QColor(*[
+                    int(float(x) * (255 if i == 3 else 1)) for i, x in
+                    enumerate(bg[bg.index("(")+1:-1].split(","))])
+                painter.setBrush(c)
+                painter.drawRoundedRect(chip, 10, 10)
+                painter.setPen(QColor(fg))
+                painter.drawText(chip, Qt.AlignmentFlag.AlignCenter,
+                    painter.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, w - 12))
 
         elif col == _KEY_COL:
             if text:
@@ -1505,6 +1537,8 @@ class TagPanel(QWidget):
     def _more_menu(self):
         menu=QMenu(self)
         menu.addAction("Rename Files from Tags").triggered.connect(self._rename)
+        menu.addAction("Tags from Filename…").triggered.connect(
+            lambda: getattr(self.window(), "_tags_from_filename", lambda: None)())
         menu.addSeparator()
         menu.addAction("Cover from File…").triggered.connect(self._pick_cover)
         menu.addAction("Paste Cover  ⌘V").triggered.connect(self._paste)
@@ -1984,6 +2018,14 @@ class MainWindow(QMainWindow):
         fbl.addWidget(self._bpm_btn)
         fbl.addWidget(self._incomplete_btn)
 
+        self._quality_only = False
+        self._quality_btn = QPushButton("Quality  ▾"); self._quality_btn.setFixedHeight(28)
+        self._quality_btn.setToolTip("Find fake 320s and lossless files made from MP3s")
+        self._quality_btn.setStyleSheet(_pill_style)
+        self._quality_btn.setCheckable(True)
+        self._quality_btn.clicked.connect(self._quality_menu)
+        fbl.addWidget(self._quality_btn)
+
         # Table
         self.table = FileTable()
         self.table.setColumnCount(len(COLUMNS))
@@ -2012,7 +2054,7 @@ class MainWindow(QMainWindow):
         hh.setHighlightSections(False)
         hh.setFixedHeight(34)
         # DJ-first visual order: BPM + Key right after Artist (logical indices unchanged)
-        for to_pos, logical in ((4, _BPM_COL), (5, _KEY_COL)):
+        for to_pos, logical in ((4, _BPM_COL), (5, _KEY_COL), (6, _QUALITY_COL)):
             hh.moveSection(hh.visualIndex(logical), to_pos)
         self._apply_default_col_widths()
         # Restore user-adjusted column widths from the last session
@@ -2139,6 +2181,8 @@ class MainWindow(QMainWindow):
         em.addSeparator()
         self._act(em,"Fit Columns",      self._fit_cols,    "Ctrl+Shift+R")
         em.addSeparator()
+        self._act(em,"Tags from Filename…", self._tags_from_filename)
+        self._act(em,"Check Audio Quality", lambda: self._check_quality(self._sel_files() or self.audio_files))
         self._act(em,"Convert WAV to AIFF…", self._convert_to_aiff)
         sm=mb.addMenu("Search")
         self._act(sm,"Search Tags…",
@@ -2215,6 +2259,69 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Convert to AIFF",
                 f"{len(errors)} file(s) were not converted:\n\n" + "\n".join(errors))
 
+    # ── Quality check ─────────────────────────────────────────────────────────
+
+    def _quality_menu(self):
+        self._quality_btn.setChecked(self._quality_only)
+        menu = QMenu(self)
+        n_sel = len(self._sel_files())
+        running = getattr(self, "_qc", None) is not None
+        a_all = menu.addAction("Check All Tracks")
+        a_all.triggered.connect(lambda: self._check_quality(self.audio_files))
+        a_sel = menu.addAction(f"Check {n_sel} Selected" if n_sel else "Check Selected")
+        a_sel.setEnabled(bool(n_sel))
+        a_sel.triggered.connect(lambda: self._check_quality(self._sel_files()))
+        if running:
+            a_all.setEnabled(False); a_sel.setEnabled(False)
+            menu.addAction("Stop Checking").triggered.connect(lambda: self._qc.stop())
+        menu.addSeparator()
+        only = menu.addAction("Show Only Problems")
+        only.setCheckable(True); only.setChecked(self._quality_only)
+        only.toggled.connect(self._set_quality_filter)
+        if not _is_pro:
+            a_all.setText("Check All Tracks  [Pro]"); a_sel.setText(a_sel.text() + "  [Pro]")
+        menu.exec(self._quality_btn.mapToGlobal(self._quality_btn.rect().bottomLeft()))
+
+    def _set_quality_filter(self, on: bool):
+        self._quality_only = on
+        self._sync_all_pill(); self._apply_filters()
+
+    def _check_quality(self, files: list):
+        if not _is_pro:
+            self.tag_panel._show_pro_prompt(); return
+        files = [f for f in files if f in self.audio_files]
+        if not files or getattr(self, "_qc", None) is not None: return
+        self._qc_total, self._qc_bad = len(files), 0
+        self.statusBar().showMessage(f"Checking audio quality… 0 of {len(files)}")
+        self._qc = _quality.check_files(files, self._on_quality, self._on_quality_done, self)
+        self._qc.progress.connect(lambda i, n: self.statusBar().showMessage(
+            f"Checking audio quality… {i} of {n}"))
+
+    def _on_quality(self, af, status, label, detail, _stats):
+        af.quality = (status, label, detail)
+        if status != "unknown":
+            _quality.remember(af, status, label, detail)
+        if status in ("fake", "suspect"): self._qc_bad += 1
+        self._refresh_row(af)
+
+    def _on_quality_done(self):
+        self._qc = None
+        n, bad = self._qc_total, self._qc_bad
+        self.statusBar().showMessage(
+            f"✓  Checked {n} track(s) — {bad} fake or suspicious." if bad
+            else f"✓  Checked {n} track(s) — no fakes found.")
+        if bad and not self._quality_only:
+            self._set_quality_filter(True)
+
+    # ── Tags from filename ────────────────────────────────────────────────────
+
+    def _tags_from_filename(self):
+        files = self._sel_files()
+        if not files: return
+        dlg = FilenameTagsDialog(files, self)
+        dlg.applied.connect(self._on_auto_tagged)
+        dlg.exec()
+
     def _on_auto_tagged(self, files: list):
         for af in files: self._refresh_row(af)
         self._sync_genres()
@@ -2260,13 +2367,16 @@ class MainWindow(QMainWindow):
         self._incomplete_btn.blockSignals(True)
         self._incomplete_btn.setChecked(False)
         self._incomplete_btn.blockSignals(False)
+        self._quality_only = False
+        self._quality_btn.setChecked(False)
         self._all_btn.setChecked(True)
         self._apply_filters()
 
     def _sync_all_pill(self):
+        self._quality_btn.setChecked(self._quality_only)
         self._all_btn.setChecked(
             self._active_genre_filter is None and self._active_bpm_min is None
-            and not self._incomplete_btn.isChecked()
+            and not self._incomplete_btn.isChecked() and not self._quality_only
             and getattr(self, "_nav_mode", "all") == "all")
 
     def _genre_filter(self, genre: Optional[str], btn: QPushButton = None):
@@ -2362,6 +2472,11 @@ class MainWindow(QMainWindow):
                     bpm = 0
                 match = (bpm_min <= bpm <= bpm_max)
 
+            # Quality: only tracks with a problem
+            if match and self._quality_only and af:
+                q = getattr(af, "quality", None)
+                match = bool(q) and q[0] in ("fake", "suspect", "ok")
+
             # Incomplete: missing any of the DJ essentials
             if match and self._incomplete_btn.isChecked() and af:
                 match = _missing_fields(af) != []
@@ -2412,6 +2527,8 @@ class MainWindow(QMainWindow):
                 if any(f._modified for f in unsaved): e.ignore(); return   # a save failed
         if getattr(self, "_update_checker", None) is not None:
             self._update_checker.shutdown()
+        if getattr(self, "_qc", None) is not None:
+            self._qc.stop()
         threads = (
             getattr(self, "_lic_thread", None),
             getattr(getattr(self, "_update_checker", None), "_thread", None),
@@ -2451,7 +2568,10 @@ class MainWindow(QMainWindow):
         if not new: return
         self.statusBar().showMessage(f"Loading {len(new)} file(s)…")
         for p in new:
-            try: self.audio_files.append(AudioFile(p))
+            try:
+                af = AudioFile(p)
+                af.quality = _quality.cached(af)
+                self.audio_files.append(af)
             except Exception as e: print(f"Error loading {p}: {e}")
         self._sync_genres()
         self._rebuild_table()
@@ -2494,6 +2614,12 @@ class MainWindow(QMainWindow):
                 item=SortItem(normalize_key(str(getattr(af,"key",""))))
                 cam=_RB_TO_CAMELOT.get(key_to_musical(str(getattr(af,"key",""))))
                 if cam: item.setData(_SORT_ROLE, int(cam[:-1])*2 + (cam[-1]=="B"))
+            elif field=="_quality":
+                q=getattr(af,"quality",None)
+                item=SortItem(q[1] if q else "")
+                item.setData(_SORT_ROLE, _Q_ORDER.get(q[0], 9) if q else 9)
+                if q:
+                    item.setData(_QUALITY_ROLE, q[0]); item.setToolTip(q[2])
             elif field=="duration_str":
                 item=SortItem(str(getattr(af,field,"")))
                 item.setData(_SORT_ROLE, float(af.duration))
@@ -2616,6 +2742,9 @@ class MainWindow(QMainWindow):
             act_tags.setText(act_tags.text().rstrip("…") + "  [Pro]")
             act_cover.setText(act_cover.text().rstrip("…") + "  [Pro]")
         menu.addSeparator()
+        menu.addAction("Tags from Filename…").triggered.connect(self._tags_from_filename)
+        menu.addAction("Check Audio Quality" + ("" if _is_pro else "  [Pro]")).triggered.connect(
+            lambda: self._check_quality(sel))
         n_wav = sum(1 for f in sel if f.extension == ".wav")
         if n_wav:
             menu.addAction(f"Convert {n_wav} WAV to AIFF (for Rekordbox)…" if n_wav > 1
