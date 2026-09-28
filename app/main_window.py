@@ -1,4 +1,3 @@
-import json
 import os
 import re
 import subprocess
@@ -8,7 +7,6 @@ from typing import List, Optional
 import qtawesome as qta
 
 _ICON_PATH    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "app-icon.png")
-_GENRES_FILE  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "sidebar_genres.json")
 
 # ── Pro license (verified against remote server, no local key list) ───────────
 _is_pro = False
@@ -119,8 +117,8 @@ from .theme import (
     C_BG, C_SURFACE, C_SURFACE2, C_SURFACE3, C_BORDER,
     C_BORDER2, C_TEXT, C_TEXT2, C_TEXT3, C_PRIMARY,
     C_PRIMARY_SOFT, C_ACCENT, C_ACCENT2, C_DANGER, C_SUCCESS,
-    C_KEY_CLR, C_SEL_BG, C_SEL_LINE, _GRAD, _GRAD_HOVER,
-    _GRAD_PRESS, _BTN_PRIMARY, _BTN_SECONDARY, _BTN_GHOST,
+    C_KEY_CLR, C_SEL_BG, C_SEL_LINE, _GRAD,
+    _BTN_PRIMARY, _BTN_SECONDARY, _BTN_GHOST,
 )
 
 
@@ -791,25 +789,19 @@ class NavSidebar(QWidget):
         self._genre_navs: dict[str, NavItem] = {}
         self._genre_container = None
         self._genre_vbox = None
-        self._genres: list[str] = self._load_genres()
+        self._manual: list[str] = self._load_genres()
+        self._genres: list[str] = sorted(self._manual)
+        self._sel = ("all", "")
         self._setup_ui()
 
     # ── Genre persistence ──────────────────────────────────────────────────────
     def _load_genres(self) -> list:
-        try:
-            if os.path.exists(_GENRES_FILE):
-                with open(_GENRES_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, list): return data
-        except Exception: pass
-        return []
+        """Genres added by hand (the rest comes from the loaded files)."""
+        v = _SETTINGS().value("manual_genres", [])
+        return [str(g) for g in v] if isinstance(v, list) else []
 
     def _save_genres(self):
-        try:
-            with open(_GENRES_FILE, "w", encoding="utf-8") as f:
-                json.dump(self._genres, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"save genres: {e}")
+        _SETTINGS().setValue("manual_genres", self._manual)
 
     def _setup_ui(self):
         root = QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
@@ -858,9 +850,11 @@ class NavSidebar(QWidget):
         cl.addWidget(add)
         cl.addSpacing(24)
 
-        # Nav items (All Tracks kept for reference but not added to layout)
+        # Library
         self._nav_all = NavItem("All Tracks", "fa5s.music", "0", active=True)
         self._nav_all.clicked.connect(lambda: self._select("all", ""))
+        cl.addWidget(self._nav_all)
+        cl.addSpacing(20)
 
         # ── Genres section ────────────────────────────────────────────────
         genres_hdr_row = QHBoxLayout()
@@ -942,6 +936,9 @@ class NavSidebar(QWidget):
         root.addWidget(content, 1)
 
     def _select(self, mode: str, value: str = ""):
+        if mode == "genre" and self._sel == ("genre", value):
+            mode, value = "all", ""
+        self._sel = (mode, value)
         if self._nav_all: self._nav_all.set_active(mode == "all")
         for g, nav in self._genre_navs.items():
             nav.set_active(mode == "genre" and g == value)
@@ -953,19 +950,22 @@ class NavSidebar(QWidget):
             self, "Add Genre", "Genre name:", QLineEdit.EchoMode.Normal)
         if ok and text.strip():
             genre = text.strip()
-            if genre not in self._genres:
-                self._genres.append(genre)
+            if genre not in self._manual:
+                self._manual.append(genre)
                 self._save_genres()
+            if genre not in self._genres:
+                self._genres = sorted(set(self._genres) | {genre})
                 self._rebuild_genre_navs()
 
     def _remove_genre(self, genre: str):
+        if genre in self._manual:
+            self._manual.remove(genre)
+            self._save_genres()
         if genre in self._genres:
             self._genres.remove(genre)
-            self._save_genres()
-            # If currently selected, switch to all
-            self.nav_filter_changed.emit("all", "")
+            if self._sel == ("genre", genre):
+                self._select("all", "")
             self._rebuild_genre_navs()
-            if self._nav_all: self._nav_all.set_active(True)
 
     def _rebuild_genre_navs(self):
         # Clear old items
@@ -977,7 +977,7 @@ class NavSidebar(QWidget):
             return
 
         for genre in self._genres:
-            nav = NavItem(genre, "fa5s.tag", "", active=False)
+            nav = NavItem(genre, "fa5s.tag", "", active=self._sel == ("genre", genre))
             nav.clicked.connect(lambda checked=False, g=genre: self._select("genre", g))
 
             # Right-click context menu to remove
@@ -994,8 +994,7 @@ class NavSidebar(QWidget):
         for af in audio_files:
             g = (getattr(af, 'genre', '') or '').strip()
             seen.add(g if g else 'No Genre')
-        self._genres = sorted(seen)
-        self._save_genres()
+        self._genres = sorted(seen | set(self._manual))
         self._rebuild_genre_navs()
         self.update_genre_counts(audio_files)
 
@@ -1347,7 +1346,7 @@ class TagPanel(QWidget):
         if not files:
             for w in self.fields.values():
                 (w.setCurrentText if isinstance(w,QComboBox) else w.setText)("")
-            self.cover.clear_cover(); self._set_enabled(False)
+            self.cover.clear_cover(); self.del_btn.hide(); self._set_enabled(False)
             self._loading = False; return
         self._set_enabled(True)
         n = len(files)
@@ -1373,6 +1372,7 @@ class TagPanel(QWidget):
         self._loading = False
 
     def _show_cover(self, data: Optional[bytes]):
+        self.del_btn.setVisible(bool(data))
         if data:
             pix = QPixmap(); pix.loadFromData(data)
             if not pix.isNull():
@@ -1385,6 +1385,7 @@ class TagPanel(QWidget):
         self.tags_changed.emit()
 
     def _on_cover(self, data, mime):
+        self.del_btn.show()
         if self._loading: return
         for f in self._files: f.set_cover(data, mime)
         self.tags_changed.emit()
@@ -1413,7 +1414,7 @@ class TagPanel(QWidget):
     def _del_cover(self):
         if not self._files: return
         for f in self._files: f.clear_cover()
-        self.cover.clear_cover(); self.tags_changed.emit()
+        self.cover.clear_cover(); self.del_btn.hide(); self.tags_changed.emit()
 
     def _search(self, preset="all"):
         if not _is_pro:
@@ -1746,10 +1747,17 @@ class SettingsDialog(QDialog):
 
 class FileTable(QTableWidget):
     files_dropped = pyqtSignal(list)
+    space_pressed = pyqtSignal()
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DropOnly)
+    def keyPressEvent(self, e):
+        # The view would use Space for selection — TrackTag uses it for Quick Look
+        if e.key() == Qt.Key.Key_Space and not e.modifiers():
+            if not e.isAutoRepeat(): self.space_pressed.emit()
+            e.accept(); return
+        super().keyPressEvent(e)
     def dragEnterEvent(self, e):
         if e.mimeData().hasUrls(): e.acceptProposedAction()
     def dragMoveEvent(self, e):
@@ -1977,6 +1985,7 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.itemSelectionChanged.connect(self._on_sel)
         self.table.files_dropped.connect(self._add_files)
+        self.table.space_pressed.connect(self._quick_look_sel)
         cl.addWidget(self.table,1)
         splitter.addWidget(center)
 
@@ -2128,6 +2137,8 @@ class MainWindow(QMainWindow):
         self._apply_filters(search=text)
 
     def _reset_filters(self):
+        if self._nav_mode != "all":
+            self.nav._select("all", "")
         self._active_genre_filter = None
         self._active_bpm_min = None
         self._active_bpm_max = None
@@ -2142,7 +2153,8 @@ class MainWindow(QMainWindow):
     def _sync_all_pill(self):
         self._all_btn.setChecked(
             self._active_genre_filter is None and self._active_bpm_min is None
-            and not self._incomplete_btn.isChecked())
+            and not self._incomplete_btn.isChecked()
+            and getattr(self, "_nav_mode", "all") == "all")
 
     def _genre_filter(self, genre: Optional[str], btn: QPushButton = None):
         self._active_genre_filter = genre
@@ -2256,6 +2268,7 @@ class MainWindow(QMainWindow):
         self._nav_mode = mode
         self._nav_value = value
         self._list_title.setText(value if mode == "genre" and value else "All Tracks")
+        self._sync_all_pill()
         self._apply_filters()
 
     def _update_status(self):
@@ -2316,6 +2329,7 @@ class MainWindow(QMainWindow):
     def _sync_genres(self):
         self.nav._sync_genres_from_files(self.audio_files)
         if self._nav_mode == "genre" and self._nav_value not in self.nav._genres:
+            self.nav._sel = ("genre", self._nav_value)   # force-reset, not toggle
             self.nav._select("all", "")
 
     def _add_files(self, paths: List[str]):
@@ -2428,7 +2442,16 @@ class MainWindow(QMainWindow):
 
     # ── Remove ────────────────────────────────────────────────────────────────
 
+    def _confirm_discard(self, files) -> bool:
+        n = sum(1 for f in files if f._modified)
+        if not n: return True
+        r = QMessageBox.question(self, "Unsaved Changes",
+            f"{n} file(s) have unsaved changes that will be lost.\nRemove anyway?",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel)
+        return r == QMessageBox.StandardButton.Discard
+
     def _remove_sel(self):
+        if not self._confirm_discard(self._sel_files()): return
         rows=sorted({idx.row() for idx in self.table.selectedIndexes()},reverse=True)
         for row in rows:
             it=self.table.item(row,_NUM_COL)
@@ -2446,6 +2469,7 @@ class MainWindow(QMainWindow):
         self._apply_filters()
 
     def _clear_all(self):
+        if not self._confirm_discard(self.audio_files): return
         self.audio_files.clear()
         self._sync_genres()
         self.table.setRowCount(0); self.tag_panel.load_files([]); self._update_status()
@@ -2496,11 +2520,13 @@ class MainWindow(QMainWindow):
         paths=_audio_paths(e.mimeData().urls())
         if paths: self._add_files(paths)
 
+    def _quick_look_sel(self):
+        sel = self._sel_files()
+        if sel: _quick_look(sel[0].path)
+
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Space and not e.isAutoRepeat():
-            sel = self._sel_files()
-            if sel:
-                _quick_look(sel[0].path)
+            self._quick_look_sel()
             e.accept()
         elif e.matches(QKeySequence.StandardKey.Paste):
             self.tag_panel._paste()

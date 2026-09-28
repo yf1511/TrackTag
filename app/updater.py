@@ -17,8 +17,7 @@ import json
 import re
 
 from PyQt6.QtCore import QThread, pyqtSignal, Qt, QTimer
-from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
-                             QApplication, QMessageBox)
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton, QApplication
 
 
 # ── Colour tokens (duplicated here to avoid circular import) ───────────────────
@@ -173,14 +172,14 @@ class UpdateBanner(QWidget):
         self._dl_thread = None
         self._self_update = can_self_update() and url.endswith(".dmg")
         self.setFixedHeight(40)
-        self.setStyleSheet(f"""
-            QWidget {{
+        self.setStyleSheet("""
+            QWidget {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
                     stop:0 rgba(139,92,246,0.18), stop:1 rgba(236,72,153,0.10));
                 border-bottom: 1px solid rgba(139,92,246,0.35);
-            }}
-            QLabel  {{ background: transparent; border: none; }}
-            QPushButton {{ border: none; background: transparent; padding: 0; }}
+            }
+            QLabel  { background: transparent; border: none; }
+            QPushButton { border: none; background: transparent; padding: 0; }
         """)
 
         row = QHBoxLayout(self)

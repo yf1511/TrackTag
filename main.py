@@ -1,7 +1,7 @@
 import sys
 import os
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QPalette, QColor, QFont, QIcon
+from PyQt6.QtGui import QPalette, QColor, QIcon
 from app.main_window import MainWindow
 try:
     from version import __version__

@@ -7,7 +7,7 @@ matching results (earliest release year, original release over compilations,
 hi-res artwork). The preview shows current → new for every field; by default
 only empty fields are filled.
 """
-import json, re, time, unicodedata, urllib.request, urllib.parse
+import json, re, unicodedata, urllib.request, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -15,12 +15,12 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QScrollArea, QWidget, QFrame, QCheckBox, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect
-from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QColor
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt6.QtGui import QPixmap, QPainter, QPainterPath
 
 from .theme import (
-    C_BG, C_SURFACE, C_SURFACE2, C_SURFACE3, C_BORDER, C_BORDER2,
-    C_TEXT, C_TEXT2, C_TEXT3, C_PRIMARY, C_SUCCESS, C_ACCENT2, C_SEL_BG,
+    C_BG, C_SURFACE, C_SURFACE2, C_BORDER, C_BORDER2,
+    C_TEXT, C_TEXT2, C_TEXT3, C_PRIMARY, C_SEL_BG,
     _BTN_PRIMARY, _BTN_SECONDARY, _BTN_GHOST,
 )
 

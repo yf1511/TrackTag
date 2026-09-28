@@ -9,7 +9,7 @@ from mutagen.id3 import (
     TRCK, TBPM, TKEY, TPUB, COMM, TCOM, APIC,
 )
 from mutagen.flac import FLAC, Picture as FLACPicture
-from mutagen.mp4 import MP4, MP4Cover
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from mutagen.wave import WAVE
 from mutagen.aiff import AIFF
 
@@ -91,12 +91,12 @@ class AudioFile:
         self.label = _id3_str(tags, 'TPUB')
         self.composer = _id3_str(tags, 'TCOM')
 
-        for key in tags.keys():
-            if key.startswith('COMM'):
-                frame = tags[key]
-                if hasattr(frame, 'text') and frame.text:
-                    self.comment = str(frame.text[0])
-                break
+        # Prefer the plain comment; skip iTunes housekeeping (iTunNORM, iTunSMPB…)
+        comms = [tags[k] for k in tags.keys() if k.startswith('COMM')]
+        comms = [c for c in comms if not str(getattr(c, 'desc', '')).startswith('iTun')]
+        comms.sort(key=lambda c: bool(getattr(c, 'desc', '')))
+        if comms and comms[0].text:
+            self.comment = str(comms[0].text[0])
 
         for key in tags.keys():
             if key.startswith('APIC'):
@@ -259,6 +259,11 @@ class AudioFile:
             except Exception:
                 pass
             img = Image.open(io.BytesIO(self.cover_data))
+            # Already a JPEG within the size limit → keep the original bytes
+            # (re-encoding on every save would slowly degrade the artwork)
+            if img.format == 'JPEG' and img.mode == 'RGB' and not (max_px and max(img.size) > max_px):
+                self.cover_mime = 'image/jpeg'
+                return
             if img.mode not in ('RGB',):
                 img = img.convert('RGB')
             if max_px and max(img.size) > max_px:
@@ -275,19 +280,28 @@ class AudioFile:
         Write ID3 frames to `tags`.
         encoding=3 (UTF-8)  → for MP3/ID3v2.4-compatible files
         encoding=1 (UTF-16) → for WAV/AIFF which must be strict ID3v2.3
+
+        Only the frames TrackTag manages are touched — cue points, beatgrids
+        (Serato GEOB), ISRC and other frames are left as they are.
         """
-        tags['TIT2'] = TIT2(encoding=encoding, text=self.title)
-        tags['TPE1'] = TPE1(encoding=encoding, text=self.artist)
-        tags['TALB'] = TALB(encoding=encoding, text=self.album)
-        tags['TPE2'] = TPE2(encoding=encoding, text=self.album_artist)
-        tags['TDRC'] = TDRC(encoding=encoding, text=self.year)
-        tags['TCON'] = TCON(encoding=encoding, text=self.genre)
-        tags['TRCK'] = TRCK(encoding=encoding, text=self.track)
-        tags['TBPM'] = TBPM(encoding=encoding, text=self.bpm)
-        tags['TKEY'] = TKEY(encoding=encoding, text=self.key)
-        tags['TPUB'] = TPUB(encoding=encoding, text=self.label)
-        tags['TCOM'] = TCOM(encoding=encoding, text=self.composer)
-        tags['COMM::eng'] = COMM(encoding=encoding, lang='eng', desc='', text=self.comment)
+        for fid, cls, value in (
+            ('TIT2', TIT2, self.title),   ('TPE1', TPE1, self.artist),
+            ('TALB', TALB, self.album),   ('TPE2', TPE2, self.album_artist),
+            ('TDRC', TDRC, self.year),    ('TCON', TCON, self.genre),
+            ('TRCK', TRCK, self.track),   ('TBPM', TBPM, self.bpm),
+            ('TKEY', TKEY, self.key),     ('TPUB', TPUB, self.label),
+            ('TCOM', TCOM, self.composer),
+        ):
+            tags.delall(fid)
+            if str(value).strip():
+                tags.add(cls(encoding=encoding, text=str(value).strip()))
+
+        # Replace the plain comment only (keep iTunNORM etc.)
+        for k in [k for k in tags.keys() if k.startswith('COMM')]:
+            if not str(getattr(tags[k], 'desc', '')).startswith('iTun'):
+                del tags[k]
+        if self.comment.strip():
+            tags.add(COMM(encoding=encoding, lang='eng', desc='', text=self.comment))
 
         # Always clear existing cover, then re-add if set
         tags.delall('APIC')
@@ -312,18 +326,15 @@ class AudioFile:
     def _save_flac(self):
         self._normalize_cover()
         audio = FLAC(self.path)
-        audio['title'] = self.title
-        audio['artist'] = self.artist
-        audio['album'] = self.album
-        audio['albumartist'] = self.album_artist
-        audio['date'] = self.year
-        audio['genre'] = self.genre
-        audio['tracknumber'] = self.track
-        audio['bpm'] = self.bpm
-        audio['initialkey'] = self.key
-        audio['label'] = self.label
-        audio['comment'] = self.comment
-        audio['composer'] = self.composer
+        for k, v in (('title', self.title), ('artist', self.artist), ('album', self.album),
+                     ('albumartist', self.album_artist), ('date', self.year),
+                     ('genre', self.genre), ('tracknumber', self.track), ('bpm', self.bpm),
+                     ('initialkey', self.key), ('label', self.label),
+                     ('comment', self.comment), ('composer', self.composer)):
+            if str(v).strip():
+                audio[k] = str(v).strip()
+            elif k in audio:
+                del audio[k]
 
         audio.clear_pictures()
         if self.cover_data:
@@ -339,30 +350,20 @@ class AudioFile:
         audio = WAVE(self.path)
         if audio.tags is None:
             audio.add_tags()
-        else:
-            audio.tags.clear()           # wipe stale frames before rewriting
         # encoding=1 (UTF-16) is the only valid text encoding for strict ID3v2.3
         # Rekordbox enforces this for WAV files (more lenient for MP3)
         self._apply_id3_tags(audio.tags, encoding=1)
-        try:
-            audio.tags.update_to_v23()
-        except Exception:
-            pass
-        audio.save()
+        audio.tags.update_to_v23()
+        audio.save(v2_version=3)      # strict ID3v2.3 for Rekordbox
 
     def _save_aiff(self):
         self._normalize_cover()
         audio = AIFF(self.path)
         if audio.tags is None:
             audio.add_tags()
-        else:
-            audio.tags.clear()
         self._apply_id3_tags(audio.tags, encoding=1)
-        try:
-            audio.tags.update_to_v23()
-        except Exception:
-            pass
-        audio.save()
+        audio.tags.update_to_v23()
+        audio.save(v2_version=3)      # strict ID3v2.3 for Rekordbox
 
     def _save_m4a(self):
         self._normalize_cover()
@@ -387,9 +388,24 @@ class AudioFile:
                 pass
         if self.bpm:
             try:
-                tags['tmpo'] = [int(self.bpm)]
+                tags['tmpo'] = [int(round(float(self.bpm)))]
             except ValueError:
                 pass
+        elif 'tmpo' in tags:
+            del tags['tmpo']
+
+        # Key + label live in iTunes freeform atoms
+        for atom, value, aliases in (
+            ('----:com.apple.iTunes:initialkey', self.key,
+             ('----:com.apple.iTunes:KEY', '----:com.apple.iTunes:INITIALKEY')),
+            ('----:com.apple.iTunes:LABEL', self.label, ('----:com.apple.iTunes:Label',)),
+        ):
+            for a in aliases:
+                if a in tags: del tags[a]
+            if value.strip():
+                tags[atom] = [MP4FreeForm(value.strip().encode('utf-8'))]
+            elif atom in tags:
+                del tags[atom]
 
         # Always clear cover, re-add as JPEG if set
         if 'covr' in tags:
