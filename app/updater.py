@@ -22,13 +22,13 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
 
 
 # ── Colour tokens (duplicated here to avoid circular import) ───────────────────
-_C_BG      = "#0b0d13"
-_C_SURFACE = "#12141b"
-_C_BORDER  = "#2a2d3a"
-_C_TEXT    = "#f1f3f5"
-_C_TEXT2   = "#a1a5b3"
-_C_PRIMARY = "#7c3aed"
-_C_ACCENT  = "#ff2d75"
+_C_BG      = "#0c0d11"
+_C_SURFACE = "#111217"
+_C_BORDER  = "#2f3039"
+_C_TEXT    = "#ededf1"
+_C_TEXT2   = "#9b9dab"
+_C_PRIMARY = "#8b5cf6"
+_C_ACCENT  = "#ec4899"
 
 
 def _parse_version(v: str):
@@ -176,8 +176,8 @@ class UpdateBanner(QWidget):
         self.setStyleSheet(f"""
             QWidget {{
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 rgba(124,58,237,0.25), stop:1 rgba(255,45,117,0.15));
-                border-bottom: 1px solid rgba(124,58,237,0.4);
+                    stop:0 rgba(139,92,246,0.18), stop:1 rgba(236,72,153,0.10));
+                border-bottom: 1px solid rgba(139,92,246,0.35);
             }}
             QLabel  {{ background: transparent; border: none; }}
             QPushButton {{ border: none; background: transparent; padding: 0; }}

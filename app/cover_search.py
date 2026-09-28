@@ -1,30 +1,153 @@
 """
-Smart multi-source search: iTunes + Discogs + Beatport run in parallel.
-A "Smart Match" banner auto-combines the best cover + metadata in one click.
+Tag & cover search: Beatport + Apple Music run in parallel.
+
+Every result is scored against the track (artist, title, mix version and
+length). The best confident match is preselected and merged with the other
+matching results (earliest release year, original release over compilations,
+hi-res artwork). The preview shows current → new for every field; by default
+only empty fields are filled.
 """
-import json, re, time, urllib.request, urllib.parse
+import json, re, time, unicodedata, urllib.request, urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QWidget, QFrame,
-    QCheckBox, QSizePolicy,
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QScrollArea, QWidget, QFrame, QCheckBox, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect
+from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QColor
+
+from .theme import (
+    C_BG, C_SURFACE, C_SURFACE2, C_SURFACE3, C_BORDER, C_BORDER2,
+    C_TEXT, C_TEXT2, C_TEXT3, C_PRIMARY, C_SUCCESS, C_ACCENT2, C_SEL_BG,
+    _BTN_PRIMARY, _BTN_SECONDARY, _BTN_GHOST,
+)
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-_UA_DG = "TrackTag/1.0 +tracktag@local"
+
+COVER_PX = 1400   # artwork size requested from the sources
 
 SOURCES = {
-    "itunes":     {"name": "Apple Music", "color": "#fc3c44", "priority": 0},
-    "beatport":   {"name": "Beatport",    "color": "#01ff95", "priority": 1},
-    "soundcloud": {"name": "SoundCloud",  "color": "#ff5500", "priority": 2},
-    "discogs":    {"name": "Discogs",     "color": "#5577ff", "priority": 3},
+    "beatport": {"name": "Beatport",    "color": "#01ff95"},
+    "itunes":   {"name": "Apple Music", "color": "#fc3c44"},
 }
+
+# Words that describe a version rather than identify a track
+_GENERIC = {"original", "extended", "mix", "radio", "edit", "club", "version",
+            "remix", "rmx", "dub", "vip", "feat", "ft", "featuring", "the",
+            "and", "x", "vs", "with", "a", "remastered", "remaster"}
+_COMPILATION = re.compile(
+    r"\b(vol|volume|sounds|hits|compilation|various|best of|essentials|collection|"
+    r"sampler|selection|anthems|top \d+|summer|winter|ibiza|miami|ade|20\d\d)\b", re.I)
+
+
+# ── matching helpers ──────────────────────────────────────────────────────────
+
+def _tokens(s: str) -> list:
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    return re.findall(r"[a-z0-9]+", s)
+
+
+def _core(tokens) -> set:
+    return {t for t in tokens if t not in _GENERIC}
+
+
+def _version(title: str) -> set:
+    """Tokens inside the trailing (…) / […] — e.g. {'extended','mix'}."""
+    parts = re.findall(r"[\(\[]([^\)\]]+)[\)\]]", title or "")
+    return set(_tokens(" ".join(parts)))
+
+
+def _vkey(title: str) -> set:
+    """Comparable version: 'Original Mix' ≡ no version, 'Extended Mix' → {'extended'}."""
+    return _version(title) - {"mix", "original", "version"}
+
+
+def _base_title(title: str) -> str:
+    return re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", title or "").strip()
+
+
+def _score(r: dict, query: str, duration: float) -> float:
+    """0‥1+ — how well a result matches the query (and the file's length)."""
+    q_core = _core(_tokens(query))
+    if not q_core:
+        return 0.0
+    r_core = _core(_tokens(f"{r['artist']} {r['title']}"))
+    hit = q_core & r_core
+    recall    = len(hit) / len(q_core)
+    precision = len(hit) / max(1, len(r_core))
+    score = 0.65 * recall + 0.35 * precision
+
+    # Mix version: "extended" vs "radio" etc.
+    qv, rv = _vkey(query), _vkey(r["title"])
+    if qv:
+        if qv == rv:            score += 0.10
+        elif qv & rv:           score += 0.04
+        elif rv:                score -= 0.10
+    elif rv:                    score -= 0.04   # query has no version, result is a special one
+
+    # Track length vs. the file
+    length = r.get("length") or 0
+    if duration and length:
+        diff = abs(duration - length)
+        if diff <= 2:    score += 0.15
+        elif diff <= 8:  score += 0.05
+        elif diff > 30:  score -= 0.15
+    return score
+
+
+def _is_match(r: dict, query: str) -> bool:
+    q_core = _core(_tokens(query))
+    r_core = _core(_tokens(f"{r['artist']} {r['title']}"))
+    if not q_core or not r_core:
+        return False
+    # DJ-mixed compilation cuts ("[Mixed]") are not the track itself
+    if "mixed" in _tokens(r["title"]) and "mixed" not in _tokens(query):
+        return False
+    # A remixer named in the query ("… (Youree Remix)") must be in the result
+    qv_core = _core(_version(query))
+    if qv_core and not qv_core <= r_core:
+        return False
+    hit = q_core & r_core
+    return len(hit) / len(q_core) >= 0.85 and len(hit) / len(r_core) >= 0.6
+
+
+def _clean_artists(names: list) -> str:
+    """Drop combined entities ('A & B') when A and B are listed; keep their order."""
+    names = [n.strip() for n in names if n and n.strip()]
+    singles = set(names)
+    order = names
+    for n in names:
+        parts = [p.strip() for p in re.split(r"\s*(?:&|,| and | x )\s*", n) if p.strip()]
+        if len(parts) > 1 and all(p in singles for p in parts):
+            order = parts + [m for m in names if m not in parts and m != n]
+            break
+    out, seen = [], set()
+    for n in order:
+        parts = [p.strip() for p in re.split(r"\s*(?:&|,| and | x )\s*", n) if p.strip()]
+        if len(parts) > 1 and all(p in singles for p in parts):
+            continue
+        if n.lower() not in seen:
+            seen.add(n.lower()); out.append(n)
+    return ", ".join(out)
+
+
+def _tidy_artist(artist: str, title: str, query: str) -> str:
+    """Beatport lists remixers as artists and sorts alphabetically — undo both."""
+    names = [n.strip() for n in artist.split(",") if n.strip()]
+    ver = _core(_version(title))
+    keep = [n for n in names if not (_core(_tokens(n)) and _core(_tokens(n)) <= ver)]
+    if keep:
+        names = keep
+    ql = " ".join(_tokens(query))
+    def pos(n):
+        i = ql.find(" ".join(_tokens(n)))
+        return i if i >= 0 else 10**6
+    return ", ".join(sorted(names, key=pos))
 
 
 # ── Workers ───────────────────────────────────────────────────────────────────
@@ -36,15 +159,13 @@ class _iTunesWorker(QThread):
         try:
             enc = urllib.parse.quote(self.q)
             req = urllib.request.Request(
-                f"https://itunes.apple.com/search?term={enc}&entity=song&limit=6",
+                f"https://itunes.apple.com/search?term={enc}&entity=song&limit=10",
                 headers={"User-Agent": _UA})
             with urllib.request.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read())
-            out, seen = [], set()
+            out = []
             for it in data.get("results", []):
                 t = it.get("artworkUrl100", "")
-                if not t or t in seen: continue
-                seen.add(t)
                 out.append({
                     "source": "itunes",
                     "artist": it.get("artistName", ""),
@@ -54,273 +175,99 @@ class _iTunesWorker(QThread):
                     "label":  "",
                     "year":   it.get("releaseDate", "")[:4],
                     "bpm": "", "key": "",
-                    "thumb":     t,
-                    "cover_url": t.replace("100x100bb","600x600bb").replace("100x100","600x600"),
+                    "length": (it.get("trackTimeMillis") or 0) / 1000,
+                    "thumb":     t.replace("100x100bb", "200x200bb"),
+                    "cover_url": t.replace("100x100bb", f"{COVER_PX}x{COVER_PX}bb"),
+                    "compilation": it.get("collectionArtistName", "") == "Various Artists",
                 })
             self.done.emit(out)
         except Exception as e:
             print(f"iTunes: {e}"); self.done.emit([])
 
 
-class _DiscogsWorker(QThread):
-    done = pyqtSignal(list)
-    def __init__(self, q): super().__init__(); self.q = q
-    def run(self):
-        try:
-            enc = urllib.parse.quote(self.q)
-            req = urllib.request.Request(
-                f"https://api.discogs.com/database/search?q={enc}&type=release&per_page=8",
-                headers={"User-Agent": _UA_DG, "Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=12) as r:
-                data = json.loads(r.read())
-            out = []
-            for it in data.get("results", []):
-                raw = it.get("title", "")
-                parts = raw.split(" - ", 1)
-                artist = parts[0].strip() if len(parts) > 1 else ""
-                title  = parts[1].strip() if len(parts) > 1 else raw
-                genre  = (it.get("style") or it.get("genre") or [""])[0]
-                lbs    = it.get("label", [])
-                label  = lbs[0].split("(")[0].strip() if lbs else ""
-                thumb  = it.get("thumb", "")
-                cover  = it.get("cover_image", thumb)
-                for bad in ("spacer", "images/vinyl", "images/default"):
-                    if bad in thumb:  thumb = ""
-                    if bad in cover:  cover = ""
-                out.append({
-                    "source": "discogs",
-                    "artist": artist, "title": title, "album": title,
-                    "genre": genre,   "label": label,
-                    "year":  str(it.get("year", "")),
-                    "bpm": "", "key": "",
-                    "thumb": thumb, "cover_url": cover or thumb,
-                })
-            self.done.emit(out)
-        except Exception as e:
-            print(f"Discogs: {e}"); self.done.emit([])
-
-
 class _BeatportWorker(QThread):
     done = pyqtSignal(list)
     def __init__(self, q): super().__init__(); self.q = q
+
     def run(self):
-        results = self._api() or self._scrape()
-        self.done.emit(results)
+        try:
+            self.done.emit(self._scrape())
+        except Exception as e:
+            print(f"Beatport: {e}"); self.done.emit([])
 
-    def _parse_track(self, it):
-        """Parse a Beatport track dict — handles both API v4 and scraped __NEXT_DATA__ formats."""
+    @staticmethod
+    def _art(uri: str, size: int) -> str:
+        if "{w}x{h}" in uri:
+            return uri.replace("{w}x{h}", f"{size}x{size}")
+        return re.sub(r"/\d+x\d+(?=/|$)", f"/{size}x{size}", uri)
+
+    def _parse_track(self, it: dict) -> dict:
         release = it.get("release") or {}
-
-        # ── Title ────────────────────────────────────────────────────────────
-        name = it.get("track_name") or it.get("name") or it.get("title") or ""
+        name = it.get("track_name") or it.get("name") or ""
         mix  = it.get("mix_name") or ""
-        title = f"{name} ({mix})" if mix and mix.lower() not in ("original mix", "") else name
+        title = f"{name} ({mix})" if mix and mix.lower() not in name.lower() else name
 
-        # ── Artists ───────────────────────────────────────────────────────────
-        artists = it.get("artists") or it.get("artist") or []
-        if isinstance(artists, list):
-            artist_str = ", ".join(
-                (a.get("artist_name") or a.get("name") or "")
-                if isinstance(a, dict) else str(a)
-                for a in artists)
-        else:
-            artist_str = str(artists)
+        names = [(a.get("artist_name") or a.get("name") or "")
+                 for a in (it.get("artists") or []) if isinstance(a, dict)]
 
-        # ── Cover ─────────────────────────────────────────────────────────────
-        # Helper: extract (thumb, hq) from an image dict — returns ("","") for waveforms
-        def _extract_img(obj) -> tuple:
-            if not isinstance(obj, dict): return "", ""
-            # Prefer dynamic_uri with size placeholder
-            dyn = obj.get("dynamic_uri") or obj.get("dynamicUri") or ""
-            if dyn and "{w}x{h}" in dyn:
-                th = dyn.replace("{w}x{h}", "150x150")
-                hq = dyn.replace("{w}x{h}", "500x500")
-                return th, hq
-            # Fall back to static uri/url
-            uri = obj.get("uri") or obj.get("url") or obj.get("src") or ""
-            if not uri: return "", ""
-            # Reject waveform images (landscape, width >> height in URL)
-            m = re.search(r'/(\d+)x(\d+)/', uri)
-            if m and int(m.group(1)) > int(m.group(2)) * 1.5: return "", ""
-            hq = re.sub(r'/\d+x\d+/', '/500x500/', uri)
-            th = re.sub(r'/\d+x\d+/', '/150x150/', uri)
-            return th, hq
+        art = release.get("release_image_dynamic_uri") or release.get("release_image_uri") or ""
+        img = release.get("image") or {}
+        if not art and isinstance(img, dict):
+            art = img.get("dynamic_uri") or img.get("uri") or ""
 
-        # Helper: extract from a plain string URL (handles /WxH/ and /image_size/WxH/ patterns)
-        def _extract_uri(uri: str) -> tuple:
-            if not uri: return "", ""
-            m = re.search(r'/(\d+)x(\d+)(?:/|$)', uri)
-            if m and int(m.group(1)) > int(m.group(2)) * 1.5: return "", ""
-            hq = re.sub(r'/\d+x\d+(?=/|$)', '/500x500', uri)
-            th = re.sub(r'/\d+x\d+(?=/|$)', '/150x150', uri)
-            return th, hq
+        gens = it.get("genre") or []
+        g0 = gens[0] if isinstance(gens, list) and gens else gens
+        genre = (g0.get("genre_name") or g0.get("name") or "") if isinstance(g0, dict) else str(g0 or "")
 
-        thu, cov = "", ""
-
-        # Priority 1: release_image_dynamic_uri / release_image_uri
-        # (Beatport scrape format — the actual square cover art)
-        rel_dyn = release.get("release_image_dynamic_uri") or ""
-        rel_uri = release.get("release_image_uri") or ""
-        if rel_dyn and "{w}x{h}" in rel_dyn:
-            thu = rel_dyn.replace("{w}x{h}", "150x150")
-            cov = rel_dyn.replace("{w}x{h}", "500x500")
-        elif rel_uri:
-            thu, cov = _extract_uri(rel_uri)
-
-        # Priority 2: release.image dict (API v4 format)
-        if not thu:
-            thu, cov = _extract_img(release.get("image") or {})
-
-        # Priority 3: other release-level plain image URIs
-        if not thu:
-            for field in ("image_uri", "imageUri", "cover_uri", "art_uri"):
-                thu, cov = _extract_uri(release.get(field) or "")
-                if thu: break
-
-        # Priority 4: release.images list
-        if not thu:
-            for img in (release.get("images") or []):
-                thu, cov = _extract_img(img)
-                if thu: break
-
-        # Priority 5: track-level image dict
-        if not thu:
-            thu, cov = _extract_img(it.get("image") or {})
-
-        # Priority 6: track_image_dynamic_uri — only if NOT a waveform
-        if not thu:
-            dyn  = it.get("track_image_dynamic_uri") or ""
-            orig = it.get("track_image_uri") or ""
-            m = re.search(r'/(\d+)x(\d+)/', orig or dyn)
-            is_waveform = bool(m and int(m.group(1)) > int(m.group(2)) * 1.5)
-            if not is_waveform:
-                if dyn and "{w}x{h}" in dyn:
-                    thu = dyn.replace("{w}x{h}", "150x150")
-                    cov = dyn.replace("{w}x{h}", "500x500")
-                elif orig:
-                    thu, cov = _extract_uri(orig)
-
-        # Priority 7: any geo-media URL anywhere in the release dict
-        if not thu and isinstance(release, dict):
-            for v in release.values():
-                if isinstance(v, str) and "geo-media" in v and "image_size" in v:
-                    thu, cov = _extract_uri(v)
-                    if thu: break
-
-        # ── Genre ─────────────────────────────────────────────────────────────
-        gens = it.get("genre") or it.get("genres") or []
-        genre = ""
-        if gens:
-            g0 = gens[0]
-            genre = (g0.get("genre_name") or g0.get("name") or "") if isinstance(g0, dict) else str(g0)
-
-        # ── Label ─────────────────────────────────────────────────────────────
         lb = it.get("label") or release.get("label") or {}
         label = (lb.get("label_name") or lb.get("name") or "") if isinstance(lb, dict) else str(lb or "")
 
-        # ── Year ─────────────────────────────────────────────────────────────
-        year = (it.get("publish_date") or it.get("release_date") or it.get("new_release_date") or
-                release.get("date") or release.get("publish_date") or "")[:4]
-
-        # ── BPM ──────────────────────────────────────────────────────────────
-        bpm = str(it.get("bpm") or "")
-
-        # ── Key ───────────────────────────────────────────────────────────────
-        key = it.get("key_name") or ""
-        if not key:
-            ki = it.get("key") or {}
-            if isinstance(ki, dict):
-                num   = ki.get("camelot_number", "")
-                ctype = ki.get("chord_type") or {}
-                cname = ctype.get("name", "") if isinstance(ctype, dict) else str(ctype)
-                key   = f"{num}{cname}" if num else cname
-            elif isinstance(ki, str):
-                key = ki
-
-        print(f"Beatport cover: thumb={thu!r:.60} cov={cov!r:.60}")
+        rel_name = release.get("release_name") or release.get("name") or ""
         return {
-            "source":    "beatport",
-            "artist":    artist_str,
-            "title":     title,
-            "album":     release.get("name", "") or it.get("album", ""),
-            "genre":     genre,
-            "label":     label,
-            "year":      year,
-            "bpm":       bpm,
-            "key":       key,
-            "thumb":     thu,
-            "cover_url": cov,
+            "source":  "beatport",
+            "artist":  _clean_artists(names),
+            "title":   title,
+            "album":   rel_name,
+            "genre":   genre,
+            "label":   label,
+            "year":    (it.get("publish_date") or it.get("release_date") or "")[:4],
+            "bpm":     str(it.get("bpm") or ""),
+            "key":     it.get("key_name") or "",
+            "length":  (it.get("length") or 0) / 1000,
+            "thumb":     self._art(art, 200) if art else "",
+            "cover_url": self._art(art, COVER_PX) if art else "",
+            "compilation": bool(rel_name) and (
+                bool(_COMPILATION.search(rel_name))
+                and not (_core(_tokens(name)) <= _core(_tokens(rel_name)))),
         }
 
-    def _api(self):
-        try:
-            enc = urllib.parse.quote(self.q)
-            req = urllib.request.Request(
-                f"https://api.beatport.com/v4/catalog/tracks/?q={enc}&per_page=6",
-                headers={"User-Agent": _UA, "Accept": "application/json",
-                         "Referer": "https://www.beatport.com/"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.loads(r.read())
-            return [self._parse_track(it) for it in data.get("results", [])]
-        except: return None
-
-    def _scrape(self):
-        try:
-            enc = urllib.parse.quote(self.q)
-            req = urllib.request.Request(
-                f"https://www.beatport.com/search/tracks?q={enc}",
-                headers={"User-Agent": _UA, "Accept": "text/html",
-                         "Accept-Language": "en-US,en;q=0.9",
-                         "Referer": "https://www.beatport.com/"})
-            with urllib.request.urlopen(req, timeout=14) as r:
-                html = r.read().decode("utf-8", errors="replace")
-            m = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
-            if not m:
-                print("Beatport: no __NEXT_DATA__ found"); return []
-            nd = json.loads(m.group(1))
-            tracks = self._dig_tracks(nd)
-            print(f"Beatport: found {len(tracks)} tracks via scrape")
-            if tracks:
-                t0 = tracks[0]
-                print(f"Beatport track[0] keys: {list(t0.keys())}")
-                rel = t0.get("release") or {}
-                print(f"Beatport release keys: {list(rel.keys()) if isinstance(rel, dict) else rel}")
-                print(f"Beatport release.image: {rel.get('image') if isinstance(rel, dict) else '?'}")
-                print(f"Beatport track.image: {t0.get('image')}")
-                print(f"Beatport track_image_uri: {t0.get('track_image_uri','')[:80]}")
-                print(f"Beatport track_image_dynamic_uri: {t0.get('track_image_dynamic_uri','')[:80]}")
-            return [self._parse_track(it) for it in tracks[:6] if isinstance(it, dict)]
-        except Exception as e:
-            print(f"Beatport scrape: {e}"); return []
+    def _scrape(self) -> list:
+        enc = urllib.parse.quote(self.q)
+        req = urllib.request.Request(
+            f"https://www.beatport.com/search/tracks?q={enc}",
+            headers={"User-Agent": _UA, "Accept": "text/html",
+                     "Accept-Language": "en-US,en;q=0.9",
+                     "Referer": "https://www.beatport.com/"})
+        with urllib.request.urlopen(req, timeout=14) as r:
+            html = r.read().decode("utf-8", errors="replace")
+        m = re.search(r'id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.DOTALL)
+        if not m:
+            return []
+        tracks = self._dig_tracks(json.loads(m.group(1)))
+        # Keep all results: the original release is often listed after compilations
+        return [self._parse_track(it) for it in tracks[:40] if isinstance(it, dict)]
 
     def _dig_tracks(self, nd: dict) -> list:
-        """Try every known __NEXT_DATA__ path to find a tracks list."""
         pp = nd.get("props", {}).get("pageProps", {})
-
-        # Path 1: dehydratedState queries
         for q in pp.get("dehydratedState", {}).get("queries", []):
             data = q.get("state", {}).get("data", {})
             results = data.get("results") or data.get("tracks") or data.get("data")
-            if results and isinstance(results, list) and results:
+            if isinstance(results, list) and results:
                 return results
-
-        # Path 2: direct pageProps.tracks
-        for key in ("tracks", "search_tracks", "searchTracks"):
-            v = pp.get(key)
-            if isinstance(v, dict):
-                r = v.get("data") or v.get("results") or []
-                if r: return r
-            elif isinstance(v, list) and v:
-                return v
-
-        # Path 3: any list of dicts with track-identifying keys anywhere in pageProps
         def _find(obj, depth=0):
             if depth > 8: return []
             if isinstance(obj, list) and obj:
-                d0 = obj[0]
-                if isinstance(d0, dict) and (
-                    "track_name" in d0 or "label" in d0 or "bpm" in d0
-                ):
+                if isinstance(obj[0], dict) and ("track_name" in obj[0] or "bpm" in obj[0]):
                     return obj
                 for item in obj:
                     r = _find(item, depth+1)
@@ -333,737 +280,604 @@ class _BeatportWorker(QThread):
         return _find(pp)
 
 
-class _SoundCloudWorker(QThread):
-    done = pyqtSignal(list)
-    def __init__(self, q): super().__init__(); self.q = q
-
-    def run(self):
-        try:
-            results = self._fetch()
-            self.done.emit(results)
-        except Exception as e:
-            print(f"SoundCloud: {e}"); self.done.emit([])
-
-    def _get_client_id(self, html: str) -> str:
-        """Extract client_id from SoundCloud page or its JS bundles."""
-        m = re.search(r'client_id["\s:=]+(["\'])([a-zA-Z0-9]{32})\1', html)
-        if m: return m.group(2)
-        js_urls = re.findall(r'https://a-v2\.sndcdn\.com/assets/[^"\']+\.js', html)
-        for url in js_urls[:4]:
-            try:
-                req = urllib.request.Request(url, headers={"User-Agent": _UA})
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    js = r.read().decode("utf-8", errors="replace")
-                m2 = re.search(r'client_id:"([a-zA-Z0-9]{32})"', js)
-                if m2: return m2.group(1)
-            except: pass
-        return ""
-
-    def _artwork(self, url: str, size_thumb="t200x200", size_hq="t500x500"):
-        if not url: return "", ""
-        thumb = re.sub(r'-(large|t\d+x\d+)\b', f'-{size_thumb}', url)
-        hq    = re.sub(r'-(large|t\d+x\d+)\b', f'-{size_hq}',    url)
-        return thumb, hq
-
-    def _parse_track(self, it: dict) -> dict:
-        user   = it.get("user") or {}
-        raw_aw = it.get("artwork_url") or user.get("avatar_url") or ""
-        thumb, hq = self._artwork(raw_aw)
-        year = str(it.get("created_at") or "")[:4]
-        return {
-            "source":    "soundcloud",
-            "artist":    user.get("username") or user.get("full_name") or "",
-            "title":     it.get("title") or "",
-            "album":     "",
-            "genre":     it.get("genre") or "",
-            "label":     "",
-            "year":      year,
-            "bpm":       str(it.get("bpm") or ""),
-            "key":       "",
-            "thumb":     thumb,
-            "cover_url": hq,
-        }
-
-    def _fetch(self) -> list:
-        enc  = urllib.parse.quote(self.q)
-        req0 = urllib.request.Request(
-            f"https://soundcloud.com/search?q={enc}",
-            headers={"User-Agent": _UA, "Accept": "text/html",
-                     "Accept-Language": "en-US,en;q=0.9"})
-        with urllib.request.urlopen(req0, timeout=12) as r:
-            html = r.read().decode("utf-8", errors="replace")
-
-        client_id = self._get_client_id(html)
-        if client_id:
-            try:
-                api_url = (f"https://api-v2.soundcloud.com/search/tracks"
-                           f"?q={enc}&client_id={client_id}&limit=6&offset=0")
-                req1 = urllib.request.Request(
-                    api_url, headers={"User-Agent": _UA,
-                                      "Referer": "https://soundcloud.com/"})
-                with urllib.request.urlopen(req1, timeout=10) as r2:
-                    data = json.loads(r2.read())
-                tracks = data.get("collection", [])
-                if tracks:
-                    print(f"SoundCloud API: {len(tracks)} tracks")
-                    return [self._parse_track(t) for t in tracks[:6]]
-            except Exception as e:
-                print(f"SoundCloud API call failed: {e}")
-
-        # Fallback: parse __sc_hydration__ from the HTML
-        return self._parse_hydration(html)
-
-    def _parse_hydration(self, html: str) -> list:
-        m = re.search(r'window\.__sc_hydration__\s*=\s*(\[.+?\]);', html, re.DOTALL)
-        if not m: return []
-        try:
-            items = json.loads(m.group(1))
-            for item in items:
-                if item.get("hydratable") == "sounds":
-                    tracks = item.get("data", {}).get("collection", [])
-                    return [self._parse_track(t) for t in tracks[:6]]
-                if item.get("hydratable") == "sound":
-                    return [self._parse_track(item.get("data", {}))]
-        except Exception as e:
-            print(f"SoundCloud hydration parse: {e}")
-        return []
+def _fetch_image(url: str, source: str, timeout=10) -> bytes:
+    h = {"User-Agent": _UA, "Accept": "image/*"}
+    if source == "beatport":
+        h["Referer"] = "https://www.beatport.com/"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=timeout) as r:
+        return r.read()
 
 
 class _ThumbLoader(QThread):
-    loaded = pyqtSignal(str, QPixmap)  # uid, pix
+    loaded = pyqtSignal(str, bytes)    # uid, image data (QPixmap is GUI-thread only)
     def __init__(self, items):         # [(uid, url, source)]
         super().__init__(); self._items = items
     def run(self):
-        for uid, url, src in self._items:
-            if self.isInterruptionRequested(): return
-            if not url: continue
-            try:
-                h = {"User-Agent": _UA, "Accept": "image/*"}
-                if src == "discogs":     h["Referer"] = "https://www.discogs.com/"
-                if src == "beatport":    h["Referer"] = "https://www.beatport.com/"
-                if src == "soundcloud":  h["Referer"] = "https://soundcloud.com/"
-                req = urllib.request.Request(url, headers=h)
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    d = r.read()
-                pix = QPixmap(); pix.loadFromData(d)
-                if not pix.isNull(): self.loaded.emit(uid, pix)
-            except: pass
-            time.sleep(0.07)
+        def one(job):
+            uid, url, src = job
+            if self.isInterruptionRequested() or not url: return uid, None
+            try:    return uid, _fetch_image(url, src, timeout=8)
+            except Exception: return uid, None
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            for uid, data in ex.map(one, self._items):
+                if self.isInterruptionRequested(): return
+                if data: self.loaded.emit(uid, data)
 
 
-# ── Smart Match Banner ────────────────────────────────────────────────────────
+# ── small painting helpers ────────────────────────────────────────────────────
 
-class SmartBanner(QFrame):
-    """Full-width 'best-of-all-sources' card shown above the grid."""
-    quick_apply = pyqtSignal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet("""
-            SmartBanner {
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #1c2d1c, stop:1 #1c1c2e);
-                border: 1px solid #2a6a2a;
-                border-radius: 10px;
-            }
-        """)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(14, 12, 14, 12)
-        row.setSpacing(16)
-
-        # Cover thumbnail
-        self.cover_lbl = QLabel()
-        self.cover_lbl.setFixedSize(90, 90)
-        self.cover_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.cover_lbl.setStyleSheet(
-            "background: #111; border-radius: 6px; color: #555; font-size: 20px;")
-        self.cover_lbl.setText("⏳")
-        row.addWidget(self.cover_lbl)
-
-        # Metadata
-        meta_col = QVBoxLayout()
-        meta_col.setSpacing(2)
-
-        badge = QLabel("⭐  Smart Match  —  beste Kombination aller Quellen")
-        badge.setStyleSheet(
-            "color: #4cde4c; font-size: 10px; font-weight: 700; letter-spacing: 0.5px;")
-        meta_col.addWidget(badge)
-
-        self.at_lbl = QLabel()
-        self.at_lbl.setStyleSheet("color: #ffffff; font-size: 12px; font-weight: 700;")
-        self.at_lbl.setWordWrap(True)
-        self.at_lbl.hide()
-        meta_col.addWidget(self.at_lbl)
-
-        self.meta_lbl = QLabel("Searching…")
-        self.meta_lbl.setStyleSheet("color: #ebebf5; font-size: 12px;")
-        self.meta_lbl.setWordWrap(True)
-        meta_col.addWidget(self.meta_lbl)
-
-        self.src_lbl = QLabel()
-        self.src_lbl.setStyleSheet("color: #636366; font-size: 10px;")
-        meta_col.addWidget(self.src_lbl)
-        row.addLayout(meta_col, 1)
-
-        # Apply button
-        self.apply_btn = QPushButton("✓  Apply All")
-        self.apply_btn.setFixedSize(160, 38)
-        self.apply_btn.setEnabled(False)
-        self.apply_btn.setStyleSheet("""
-            QPushButton {
-                background: #1e8c1e; color: white; border: none;
-                border-radius: 8px; font-weight: 700; font-size: 12px;
-            }
-            QPushButton:hover   { background: #28a828; }
-            QPushButton:pressed { background: #146014; }
-            QPushButton:disabled { background: #2c2c2e; color: #555; }
-        """)
-        self.apply_btn.clicked.connect(self.quick_apply)
-        row.addWidget(self.apply_btn)
-
-    def update_meta(self, sm: dict):
-        # Interpret – Titel
-        artist = sm.get("artist","").strip()
-        title  = sm.get("title","").strip()
-        if artist or title:
-            self.at_lbl.setText(f"{artist} – {title}" if artist and title
-                                else artist or title)
-            self.at_lbl.show()
-        else:
-            self.at_lbl.hide()
-
-        parts = []
-        if sm.get("genre"): parts.append(f"🎵  {sm['genre']}")
-        if sm.get("label"): parts.append(f"🏷  {sm['label']}")
-        if sm.get("year"):  parts.append(f"📅  {sm['year']}")
-        if sm.get("bpm"):   parts.append(f"♩  {sm['bpm']} BPM")
-        if sm.get("key"):   parts.append(f"🎹  {sm['key']}")
-        self.meta_lbl.setText("   ·   ".join(parts) if parts else "(keine Metadaten gefunden)")
-
-        srcs = []
-        if sm.get("cover_src"):  srcs.append(f"Cover: {SOURCES[sm['cover_src']]['name']}")
-        if sm.get("genre_src"):  srcs.append(f"Genre: {SOURCES[sm['genre_src']]['name']}")
-        if sm.get("label_src"):  srcs.append(f"Label: {SOURCES[sm['label_src']]['name']}")
-        self.src_lbl.setText("   ".join(srcs))
-        self.apply_btn.setEnabled(bool(parts) or bool(sm.get("cover_url")))
-
-    def set_thumb(self, pix: QPixmap):
-        scaled = pix.scaled(90, 90,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation)
-        self.cover_lbl.setPixmap(scaled)
+def _rounded(pix: QPixmap, size: int, radius: float) -> QPixmap:
+    dpr = 2.0; px = int(size * dpr)
+    src = pix.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                     Qt.TransformationMode.SmoothTransformation)
+    out = QPixmap(px, px); out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath(); path.addRoundedRect(0, 0, px, px, radius*dpr, radius*dpr)
+    p.setClipPath(path)
+    p.drawPixmap((px-src.width())//2, (px-src.height())//2, src); p.end()
+    out.setDevicePixelRatio(dpr)
+    return out
 
 
-# ── Result card ───────────────────────────────────────────────────────────────
+def _lbl(text="", color=C_TEXT, size=12, weight=400, wrap=False) -> QLabel:
+    l = QLabel(text)
+    l.setStyleSheet(f"color:{color};font-size:{size}px;font-weight:{weight};"
+                    f"background:transparent;border:none;")
+    l.setWordWrap(wrap)
+    return l
 
-class _Card(QFrame):
+
+def _chip(text: str, fg: str, bg: str) -> QLabel:
+    c = QLabel(text)
+    c.setStyleSheet(f"color:{fg};background:{bg};border:none;border-radius:9px;"
+                    f"font-size:10px;font-weight:600;padding:0 8px;")
+    c.setFixedHeight(18)
+    c.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+    return c
+
+
+def _art_placeholder(label: QLabel, size: int, radius: int):
+    label.setStyleSheet(f"background:{C_SURFACE2};border-radius:{radius}px;border:none;")
+    label.clear()
+
+
+# ── Result row ────────────────────────────────────────────────────────────────
+
+class _ResultRow(QFrame):
     selected = pyqtSignal(str)
+    activated = pyqtSignal(str)
+    ART = 44
 
-    def __init__(self, uid: str, r: dict, show_cover: bool = True):
+    def __init__(self, uid: str, r: dict, best: bool = False, matched: bool = True):
         super().__init__()
         self.uid = uid
-        self.setFixedWidth(175)           # height is dynamic
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self._sel = False
-        self._show_cover = show_cover
-        self._style(False)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(64)
+        self.setObjectName("resultRow")
+        self._style()
 
-        vl = QVBoxLayout(self)
-        vl.setContentsMargins(6, 6, 6, 6)
-        vl.setSpacing(4)
+        row = QHBoxLayout(self); row.setContentsMargins(10, 0, 12, 0); row.setSpacing(12)
+        self.art = QLabel(); self.art.setFixedSize(self.ART, self.ART)
+        _art_placeholder(self.art, self.ART, 6)
+        row.addWidget(self.art)
 
-        # Cover thumbnail — only shown in cover/all mode, not in tags_only
-        self.thumb = None
-        if show_cover:
-            self.thumb = QLabel()
-            self.thumb.setFixedSize(163, 120)
-            self.thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.thumb.setWordWrap(True)
-            has_img = bool(r.get("thumb") or r.get("cover_url"))
-            sm_col = SOURCES.get(r["source"], {"color": "#555"})["color"]
-            if has_img:
-                self.thumb.setStyleSheet("background:#111;border-radius:4px;color:#555;font-size:18px;")
-                self.thumb.setText("⏳")
-            else:
-                t = (r.get("title") or r.get("album") or "")[:38]
-                self.thumb.setStyleSheet(
-                    f"background:{sm_col}14;border-radius:4px;"
-                    f"color:{sm_col};font-size:10px;padding:6px;")
-                self.thumb.setText(f"🎵\n{t}\n\n(Kein Cover)")
-            vl.addWidget(self.thumb)
+        col = QVBoxLayout(); col.setSpacing(2); col.setContentsMargins(0, 0, 0, 0)
+        top = QHBoxLayout(); top.setSpacing(6)
+        t = _lbl(r.get("title", ""), C_TEXT if matched else C_TEXT2, 13, 500)
+        t.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        top.addWidget(t, 1)
+        col.addLayout(top)
+        sub = " · ".join(x for x in (r.get("artist", ""), r.get("label", "") or r.get("album", "")) if x)
+        s = _lbl(sub, C_TEXT2 if matched else C_TEXT3, 11)
+        s.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        col.addWidget(s)
+        row.addLayout(col, 1)
 
-        # Source badge
-        sm = SOURCES.get(r["source"], {"name": r["source"], "color": "#555"})
-        b = QLabel(sm["name"])
-        b.setFixedHeight(16)
-        b.setStyleSheet(
-            f"background:{sm['color']}30;color:{sm['color']};"
-            "border-radius:3px;font-size:8px;font-weight:700;padding:0 5px;")
-        vl.addWidget(b)
+        meta = []
+        if r.get("bpm"): meta.append(r["bpm"])
+        if r.get("key"): meta.append(_key_display(r["key"]))
+        if meta:
+            row.addWidget(_lbl("  ·  ".join(meta), C_TEXT2, 11))
+        if best:
+            row.addWidget(_chip("Best match", "#c4b5fd", "rgba(139,92,246,0.18)"),
+                          0, Qt.AlignmentFlag.AlignVCenter)
+        src = SOURCES.get(r["source"], {"name": r["source"], "color": C_TEXT3})
+        dot = _lbl("●", src["color"], 8); dot.setToolTip(src["name"])
+        row.addWidget(dot)
 
-        # Artist – Title  (white, prominent)
-        artist = r.get("artist", "").strip()
-        title  = r.get("title", "").strip()
-        if artist or title:
-            text = f"{artist} – {title}" if (artist and title) else (artist or title)
-            at_lbl = QLabel(text)
-            at_lbl.setStyleSheet("color:#ffffff;font-size:9px;font-weight:700;")
-            at_lbl.setWordWrap(True)
-            vl.addWidget(at_lbl)
-
-        # Metadata rows
-        for icon, key, color in [("🎵", "genre", "#0a84ff"),
-                                   ("🏷", "label", "#d4b0ff"),
-                                   ("📅", "year",  "#8e8e93"),
-                                   ("♩", "bpm",   "#ff9f0a"),
-                                   ("🎹", "key",   "#30d158")]:
-            val = r.get(key, "")
-            if not val: continue
-            suffix = " BPM" if key == "bpm" else ""
-            lbl = QLabel(f"{icon} {val}{suffix}")
-            lbl.setStyleSheet(f"color:{color};font-size:9px;font-weight:600;")
-            lbl.setWordWrap(True)
-            vl.addWidget(lbl)
-
-        vl.addStretch(1)
-
-    def _style(self, sel):
-        if sel:
-            self.setStyleSheet("QFrame{border-radius:9px;background:#1c3a5e;border:2px solid #0a84ff;}")
-        else:
-            self.setStyleSheet("QFrame{border-radius:9px;background:#2c2c2e;border:none;}")
+    def _style(self):
+        bg = C_SEL_BG if self._sel else "transparent"
+        border = "rgba(139,92,246,0.55)" if self._sel else "transparent"
+        self.setStyleSheet(
+            f"QFrame#resultRow{{background:{bg};border:1px solid {border};border-radius:10px;}}"
+            f"QFrame#resultRow:hover{{background:{C_SEL_BG if self._sel else C_SURFACE2};}}")
 
     def set_thumb(self, pix: QPixmap):
-        if self.thumb is None: return
-        s = pix.scaled(160, 126, Qt.AspectRatioMode.KeepAspectRatio,
-                       Qt.TransformationMode.SmoothTransformation)
-        self.thumb.setPixmap(s)
+        self.art.setStyleSheet("background:transparent;border:none;")
+        self.art.setPixmap(_rounded(pix, self.ART, 6))
 
     def mark(self, sel: bool):
-        self._sel = sel; self._style(sel)
+        self._sel = sel; self._style()
 
     def mousePressEvent(self, _): self.selected.emit(self.uid)
+    def mouseDoubleClickEvent(self, _): self.activated.emit(self.uid)
+
+
+_CHECK_PNG = None
+
+def _check_png() -> str:
+    """Render a white check mark once and return its path (for the QSS image)."""
+    global _CHECK_PNG
+    if _CHECK_PNG is None:
+        _CHECK_PNG = ""
+        try:
+            import os, tempfile, qtawesome as qta
+            path = os.path.join(tempfile.gettempdir(), "tracktag_check.png")
+            qta.icon("fa5s.check", color="#ffffff").pixmap(20, 20).save(path)
+            _CHECK_PNG = path
+        except Exception:
+            pass
+    return _CHECK_PNG
+
+
+def _key_display(k: str) -> str:
+    try:
+        from .main_window import normalize_key
+        return normalize_key(k)
+    except Exception:
+        return k
 
 
 # ── Main dialog ───────────────────────────────────────────────────────────────
 
+_FIELDS = [("cover", "Cover"), ("artist", "Artist"), ("title", "Title"),
+           ("album", "Album"), ("genre", "Genre"), ("label", "Label"),
+           ("year", "Year"), ("bpm", "BPM"), ("key", "Key")]
+
+
 class MetaSearchDialog(QDialog):
     result_selected = pyqtSignal(dict)
 
-    def __init__(self, artist="", title="", album="", cover_only=False, preset="all", parent=None):
+    def __init__(self, artist="", title="", album="", preset="all",
+                 current: Optional[dict] = None, duration: float = 0.0,
+                 has_cover: bool = False, parent=None):
         super().__init__(parent)
-        self._cover_only = cover_only
-        self._preset = preset   # 'all' | 'cover_only' | 'tags_only'
-        self.setWindowTitle("Im Internet suchen — Cover & Metadaten")
-        self.setMinimumSize(800, 660)
-        self.resize(880, 720)
+        self._preset = preset          # 'all' | 'cover_only' | 'tags_only'
+        self._current = current or {"artist": artist, "title": title, "album": album}
+        self._duration = duration or 0.0
+        self._has_cover = has_cover
+        self.setWindowTitle("Find Cover" if preset == "cover_only" else "Search Tags")
+        self.setMinimumSize(920, 640)
+        self.resize(1000, 680)
         self._results: dict[str, dict] = {}
-        self._cards:   dict[str, _Card] = {}
+        self._rows:    dict[str, _ResultRow] = {}
+        self._pix:     dict[str, QPixmap] = {}
         self._sel_uid: Optional[str] = None
         self._pending  = 0
-        self._smart: dict = {}
-        self._setup_ui(artist, title, album)
+        self._workers: list = []
+        self._loader = None
+        self._setup_ui(f"{artist} {title}".strip() or album)
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def _wait_for_workers(self):
-        workers = [
-            getattr(self, f"_w{worker.__name__}", None)
-            for worker in (_iTunesWorker, _DiscogsWorker, _BeatportWorker, _SoundCloudWorker)
-        ]
-        workers.append(getattr(self, "_loader", None))
-        for worker in workers:
-            if worker is not None and worker.isRunning():
-                worker.requestInterruption()
-        for worker in workers:
-            if worker is not None and worker.isRunning():
-                worker.wait()
+        workers = list(self._workers) + ([self._loader] if self._loader else [])
+        for w in workers:
+            if w.isRunning(): w.requestInterruption()
+        for w in workers:
+            if w.isRunning(): w.wait()
 
     def accept(self):
-        self._wait_for_workers()
-        super().accept()
+        self._wait_for_workers(); super().accept()
 
     def reject(self):
-        self._wait_for_workers()
-        super().reject()
+        self._wait_for_workers(); super().reject()
 
     def closeEvent(self, event):
-        self._wait_for_workers()
-        super().closeEvent(event)
+        self._wait_for_workers(); super().closeEvent(event)
 
     # ── layout ────────────────────────────────────────────────────────────────
 
-    def _setup_ui(self, artist, title, album):
-        self.setStyleSheet("QDialog { background: #141416; }")
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+    def _setup_ui(self, query: str):
+        self.setStyleSheet(f"QDialog{{background:{C_BG};}}")
+        root = QVBoxLayout(self); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
-        # ── Top bar (search + source chips) ──────────────────────────────
-        top_bar = QWidget()
-        top_bar.setStyleSheet("background: #1c1c1e; border-bottom: 1px solid #2c2c2e;")
-        top_bar.setFixedHeight(72)
-        tb = QVBoxLayout(top_bar)
-        tb.setContentsMargins(20, 10, 20, 10)
-        tb.setSpacing(6)
-
-        # Search row
-        sr = QHBoxLayout(); sr.setSpacing(8)
-        self.q_edit = QLineEdit()
-        self.q_edit.setFixedHeight(38)
-        self.q_edit.setPlaceholderText("🔍   Interpret + Titel suchen…")
-        self.q_edit.setText(f"{artist} {title}".strip() or album)
-        self.q_edit.setStyleSheet("""
-            QLineEdit {
-                background: #2c2c2e; border: 1.5px solid #3a3a3c;
-                border-radius: 10px; padding: 0 14px;
-                color: #ebebf5; font-size: 13px;
-                selection-background-color: #0a84ff;
-            }
-            QLineEdit:focus { border-color: #0a84ff; background: #1c2d40; }
-        """)
+        # Search bar
+        top = QFrame(); top.setFixedHeight(64)
+        top.setStyleSheet(f"QFrame{{background:{C_BG};border:none;border-bottom:1px solid {C_BORDER};}}")
+        tl = QHBoxLayout(top); tl.setContentsMargins(20, 0, 20, 0); tl.setSpacing(8)
+        self.q_edit = QLineEdit(query)
+        self.q_edit.setFixedHeight(36)
+        self.q_edit.setPlaceholderText("Artist and title…")
+        self.q_edit.setClearButtonEnabled(True)
+        try:
+            import qtawesome as qta
+            self.q_edit.addAction(qta.icon("fa5s.search", color=C_TEXT3),
+                                  QLineEdit.ActionPosition.LeadingPosition)
+        except Exception:
+            pass
+        self.q_edit.setStyleSheet(f"""
+            QLineEdit{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid {C_BORDER};
+                       border-radius:9px;padding:0 8px;font-size:13px;}}
+            QLineEdit:focus{{border-color:{C_PRIMARY};background:{C_BG};}}""")
         self.q_edit.returnPressed.connect(self._search)
-        sr.addWidget(self.q_edit, 1)
-
-        self.s_btn = QPushButton("Suchen")
-        self.s_btn.setFixedSize(88, 38)
-        self.s_btn.setStyleSheet("""
-            QPushButton {
-                background: #0a84ff; color: white; border: none;
-                border-radius: 10px; font-weight: 700; font-size: 13px;
-            }
-            QPushButton:hover   { background: #2a94ff; }
-            QPushButton:pressed { background: #006ee0; }
-            QPushButton:disabled { background: #2c2c2e; color: #555; }
-        """)
+        tl.addWidget(self.q_edit, 1)
+        self.s_btn = QPushButton("Search"); self.s_btn.setFixedHeight(36)
+        self.s_btn.setStyleSheet(_BTN_SECONDARY + "QPushButton{padding:0 18px;font-size:13px;}")
         self.s_btn.clicked.connect(self._search)
-        sr.addWidget(self.s_btn)
-        tb.addLayout(sr)
-        root.addWidget(top_bar)
+        tl.addWidget(self.s_btn)
+        root.addWidget(top)
 
-        # ── Content area ──────────────────────────────────────────────────
-        inner = QWidget()
-        inner.setStyleSheet("background: #141416;")
-        i_layout = QVBoxLayout(inner)
-        i_layout.setContentsMargins(20, 12, 20, 0)
-        i_layout.setSpacing(8)
-        root.addWidget(inner, 1)
+        body = QHBoxLayout(); body.setContentsMargins(0, 0, 0, 0); body.setSpacing(0)
 
-        # Source chips
-        chips_row = QHBoxLayout(); chips_row.setSpacing(6)
-        ql = QLabel("Quellen:"); ql.setStyleSheet("color:#636366;font-size:10px;font-weight:600;")
-        chips_row.addWidget(ql)
-        for s in SOURCES.values():
-            chip = QLabel(f"  {s['name']}  ")
-            chip.setStyleSheet(
-                f"background:{s['color']}22;color:{s['color']};"
-                "border-radius:8px;font-size:9px;font-weight:700;padding:2px 0;")
-            chip.setFixedHeight(18)
-            chips_row.addWidget(chip)
-        chips_row.addStretch()
-        i_layout.addLayout(chips_row)
-
-        # Status
-        self.status = QLabel("Enter a search term and press Enter.")
-        self.status.setStyleSheet("color:#48484a;font-size:11px;")
-        i_layout.addWidget(self.status)
-
-        # Smart banner
-        self.banner = SmartBanner()
-        self.banner.quick_apply.connect(self._quick_apply)
-        self.banner.hide()
-        i_layout.addWidget(self.banner)
-
-        # Divider
-        self.divider = QFrame()
-        self.divider.setFixedHeight(1)
-        self.divider.setStyleSheet("background:#2c2c2e;")
-        self.divider.hide()
-        i_layout.addWidget(self.divider)
-
-        # Results grid
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
+        # Left: results list
+        left = QWidget(); left.setStyleSheet(f"background:{C_BG};")
+        ll = QVBoxLayout(left); ll.setContentsMargins(14, 14, 8, 0); ll.setSpacing(8)
+        self.status = _lbl("", C_TEXT3, 11)
+        self.status.setContentsMargins(8, 0, 0, 0)
+        ll.addWidget(self.status)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; }")
-        self._gw = QWidget()
-        self._gw.setStyleSheet("background: transparent;")
-        self._grid = QGridLayout(self._gw)
-        self._grid.setSpacing(10)
-        self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        scroll.setWidget(self._gw)
-        i_layout.addWidget(scroll, 1)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        self._list_w = QWidget(); self._list_w.setStyleSheet("background:transparent;")
+        self._list = QVBoxLayout(self._list_w)
+        self._list.setContentsMargins(0, 0, 6, 12); self._list.setSpacing(2)
+        self._list.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(self._list_w)
+        ll.addWidget(scroll, 1)
+        body.addWidget(left, 1)
 
-        # ── Bottom bar (checkboxes + buttons) ─────────────────────────────
-        bottom = QWidget()
-        bottom.setStyleSheet(
-            "background: #1c1c1e; border-top: 1px solid #2c2c2e;")
-        b_layout = QVBoxLayout(bottom)
-        b_layout.setContentsMargins(20, 10, 20, 14)
-        b_layout.setSpacing(8)
+        # Right: preview of the selected result
+        right = QFrame(); right.setFixedWidth(380); right.setObjectName("preview")
+        right.setStyleSheet(f"QFrame#preview{{background:{C_SURFACE};border:none;"
+                            f"border-left:1px solid {C_BORDER};}}")
+        rl = QVBoxLayout(right); rl.setContentsMargins(24, 20, 24, 12); rl.setSpacing(0)
 
-        # Checkboxes
-        chk_row = QHBoxLayout(); chk_row.setSpacing(12)
-        take_lbl = QLabel("Apply:")
-        take_lbl.setStyleSheet("color:#636366;font-size:10px;font-weight:600;")
-        chk_row.addWidget(take_lbl)
-        self.chk = {}
-        # In tags_only mode: show artist+title+tags, no cover
-        # In cover_only mode: show only cover
-        # In all mode: show everything
-        chk_fields = []
-        if self._preset != "cover_only":
-            chk_fields += [("artist","🎤 Artist"), ("title","📝 Title")]
-        if self._preset != "tags_only":
-            chk_fields += [("cover","🖼 Cover")]
-        chk_fields += [("genre","🎵 Genre"), ("label","🏷 Label"),
-                       ("year","📅 Year"), ("bpm","♩ BPM"), ("key","🎹 Key")]
+        head = QHBoxLayout(); head.setSpacing(16)
+        self.p_art = QLabel(); self.p_art.setFixedSize(112, 112)
+        _art_placeholder(self.p_art, 112, 10)
+        head.addWidget(self.p_art, 0, Qt.AlignmentFlag.AlignTop)
+        hv = QVBoxLayout(); hv.setSpacing(4)
+        self.p_badge = _chip("", "#c4b5fd", "rgba(139,92,246,0.18)")
+        self.p_badge.hide()
+        bl = QHBoxLayout(); bl.addWidget(self.p_badge); bl.addStretch()
+        hv.addLayout(bl)
+        self.p_title = _lbl("", C_TEXT, 15, 600, wrap=True)
+        self.p_artist = _lbl("", C_TEXT2, 12, 400, wrap=True)
+        self.p_src = _lbl("", C_TEXT3, 11)
+        hv.addWidget(self.p_title); hv.addWidget(self.p_artist)
+        hv.addStretch(); hv.addWidget(self.p_src)
+        head.addLayout(hv, 1)
+        rl.addLayout(head)
+        rl.addSpacing(16)
 
-        _chk_style = """
-            QCheckBox { color:#ebebf5; font-size:11px; spacing:4px; }
-            QCheckBox::indicator { width:14px; height:14px; border-radius:4px;
-                border:1.5px solid #3a3a3c; background:#2c2c2e; }
-            QCheckBox::indicator:checked { background:#0a84ff; border-color:#0a84ff; }
-        """
-        for key, label in chk_fields:
-            c = QCheckBox(label)
-            c.setChecked(True)
-            c.setStyleSheet(_chk_style)
+        fh = QHBoxLayout()
+        fh.addWidget(_lbl("APPLY", C_TEXT3, 10, 600))
+        fh.addStretch()
+        self.p_hint = _lbl("Only empty fields are ticked", C_TEXT3, 10)
+        fh.addWidget(self.p_hint)
+        rl.addLayout(fh)
+        rl.addSpacing(6)
+
+        self.chk: dict[str, QCheckBox] = {}
+        self._new_lbl: dict[str, QLabel] = {}
+        self._old_lbl: dict[str, QLabel] = {}
+        self._field_rows: dict[str, QWidget] = {}
+        chk_ss = f"""
+            QCheckBox{{spacing:0;background:transparent;}}
+            QCheckBox::indicator{{width:16px;height:16px;border-radius:5px;
+                border:1px solid {C_BORDER2};background:{C_SURFACE2};}}
+            QCheckBox::indicator:hover{{border-color:{C_PRIMARY};}}
+            QCheckBox::indicator:checked{{background:{C_PRIMARY};border-color:{C_PRIMARY};
+                image:url("{_check_png()}");}}
+            QCheckBox::indicator:disabled{{background:transparent;border-color:{C_SURFACE2};}}"""
+        for key, name in _FIELDS:
+            w = QWidget(); w.setFixedHeight(36)
+            w.setStyleSheet("background:transparent;")
+            h = QHBoxLayout(w); h.setContentsMargins(0, 1, 0, 0); h.setSpacing(12)
+            h.setAlignment(Qt.AlignmentFlag.AlignTop)
+            c = QCheckBox(); c.setStyleSheet(chk_ss)
+            c.setCursor(Qt.CursorShape.PointingHandCursor)
             self.chk[key] = c
-            chk_row.addWidget(c)
-        chk_row.addStretch()
-        b_layout.addLayout(chk_row)
+            h.addWidget(c)
+            h.addWidget(_lbl(name, C_TEXT2, 12), 0)
+            h.itemAt(1).widget().setFixedWidth(52)
+            v = QVBoxLayout(); v.setSpacing(0)
+            nl = _lbl("", C_TEXT, 12, 500); nl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            ol = _lbl("", C_TEXT3, 10); ol.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            v.addWidget(nl); v.addWidget(ol)
+            h.addLayout(v, 1)
+            self._new_lbl[key] = nl; self._old_lbl[key] = ol
+            self._field_rows[key] = w
+            c.toggled.connect(self._update_apply_btn)
+            rl.addWidget(w)
+        rl.addStretch()
+        body.addWidget(right)
 
-        # Apply preset overrides
-        if self._cover_only or self._preset == "cover_only":
-            for k, c in self.chk.items():
-                c.setChecked(k == "cover")
-        elif self._preset == "tags_only":
-            for k, c in self.chk.items():
-                c.setChecked(k not in ("cover",))
+        wrap = QWidget(); wrap.setLayout(body)
+        root.addWidget(wrap, 1)
 
-        # Buttons row
-        br = QHBoxLayout(); br.setSpacing(8); br.addStretch()
-        cb = QPushButton("Abbrechen")
-        cb.setFixedHeight(38)
-        cb.setStyleSheet("""
-            QPushButton { background:#2c2c2e; color:#ebebf5; border:none;
-                border-radius:10px; font-size:13px; padding:0 18px; }
-            QPushButton:hover { background:#3a3a3c; }
-        """)
-        cb.clicked.connect(self.reject); br.addWidget(cb)
-        self.ok_btn = QPushButton("✓  Apply Selection")
-        self.ok_btn.setFixedHeight(38)
-        self.ok_btn.setEnabled(False)
-        self.ok_btn.setDefault(True)
-        self.ok_btn.setStyleSheet("""
-            QPushButton { background:#0a84ff; color:white; border:none;
-                border-radius:10px; padding:0 20px; font-weight:700; font-size:13px; }
-            QPushButton:hover   { background:#2a94ff; }
-            QPushButton:pressed { background:#0060c0; }
-            QPushButton:disabled { background:#2c2c2e; color:#48484a; }
-        """)
+        # Bottom bar
+        bottom = QFrame(); bottom.setFixedHeight(64)
+        bottom.setStyleSheet(f"QFrame{{background:{C_SURFACE};border:none;border-top:1px solid {C_BORDER};}}")
+        bl2 = QHBoxLayout(bottom); bl2.setContentsMargins(20, 0, 20, 0); bl2.setSpacing(8)
+        self.foot = _lbl("Double-click a result to apply it", C_TEXT3, 11)
+        bl2.addWidget(self.foot); bl2.addStretch()
+        cb = QPushButton("Cancel"); cb.setFixedHeight(36)
+        cb.setStyleSheet(_BTN_GHOST + "QPushButton{padding:0 16px;font-size:13px;}")
+        cb.clicked.connect(self.reject); bl2.addWidget(cb)
+        self.ok_btn = QPushButton("Apply"); self.ok_btn.setFixedHeight(36)
+        self.ok_btn.setMinimumWidth(140)
+        self.ok_btn.setStyleSheet(_BTN_PRIMARY)
+        self.ok_btn.setEnabled(False); self.ok_btn.setDefault(True)
         self.ok_btn.clicked.connect(self._apply_selection)
-        br.addWidget(self.ok_btn)
-        b_layout.addLayout(br)
+        bl2.addWidget(self.ok_btn)
         root.addWidget(bottom)
 
+        self._show_preview(None)
         if self.q_edit.text().strip():
-            QTimer.singleShot(150, self._search)
+            QTimer.singleShot(120, self._search)
+        else:
+            self.status.setText("Type artist and title, then press Enter.")
 
     # ── search ────────────────────────────────────────────────────────────────
 
     def _search(self):
         q = self.q_edit.text().strip()
-        if not q: return
+        if not q or self._pending: return
+        self._wait_for_workers()
         self._clear()
-        self._pending = 4
-        self.s_btn.setEnabled(False)
-        self.ok_btn.setEnabled(False)
-        self.banner.hide(); self.divider.hide()
-        self.status.setText("🔍  Suche auf Apple Music, Beatport, SoundCloud und Discogs…")
-        for Cls in (_iTunesWorker, _DiscogsWorker, _BeatportWorker, _SoundCloudWorker):
+        self._query = q
+        self.s_btn.setEnabled(False); self.ok_btn.setEnabled(False)
+        self.status.setText("Searching Beatport and Apple Music…")
+        self._workers = []
+        self._pending = 2
+        for Cls in (_BeatportWorker, _iTunesWorker):
             w = Cls(q); w.done.connect(self._on_results); w.start()
-            setattr(self, f"_w{Cls.__name__}", w)
+            self._workers.append(w)
 
     def _clear(self):
-        for i in reversed(range(self._grid.count())):
-            widget = self._grid.itemAt(i).widget()
-            if widget: widget.deleteLater()
-        self._results.clear(); self._cards.clear()
-        self._sel_uid = None; self._smart = {}
-
-    # ── receive & display ─────────────────────────────────────────────────────
+        while self._list.count():
+            it = self._list.takeAt(0)
+            if it.widget(): it.widget().deleteLater()
+        self._results.clear(); self._rows.clear(); self._pix.clear()
+        self._sel_uid = None
+        self._show_preview(None)
 
     def _on_results(self, results: list):
         for r in results:
-            uid = f"{r['source']}_{len(self._results)}"
-            self._results[uid] = r
+            self._results[f"{r['source']}_{len(self._results)}"] = r
         self._pending -= 1
         if self._pending == 0:
-            self._rebuild(); self.s_btn.setEnabled(True)
+            self.s_btn.setEnabled(True)
+            self._rebuild()
+
+    # ── ranking ───────────────────────────────────────────────────────────────
+
+    def _rank(self):
+        q = self._query
+        seen, ranked = set(), []
+        for uid, r in self._results.items():
+            k = (r["source"], r["artist"].lower(), r["title"].lower(),
+                 (r["label"] or r["album"]).lower(), r["year"])
+            if k in seen: continue
+            seen.add(k)
+            if r["source"] == "beatport":
+                r["artist"] = _tidy_artist(r["artist"], r["title"], q)
+            r["_score"] = _score(r, q, self._duration) - (0.05 if r.get("compilation") else 0)
+            r["_match"] = _is_match(r, q)
+            ranked.append(uid)
+        # Beatport first on ties (richer DJ data)
+        ranked.sort(key=lambda u: (not self._results[u]["_match"],
+                                   -self._results[u]["_score"],
+                                   self._results[u]["source"] != "beatport"))
+        return ranked
+
+    def _best_match(self, ranked: list) -> Optional[dict]:
+        """Merge all confident matches of the same track into one result."""
+        matches = [self._results[u] for u in ranked if self._results[u]["_match"]]
+        if not matches:
+            return None
+        top = matches[0]
+        # Same track = same base title and same version (Original ≡ none)
+        same_base, top_v = _core(_tokens(_base_title(top["title"]))), _vkey(top["title"])
+        same = [m for m in matches
+                if _core(_tokens(_base_title(m["title"]))) == same_base
+                and _vkey(m["title"]) == top_v]
+
+        bp = [m for m in same if m["source"] == "beatport"]
+        # Original release: not a compilation, then earliest year
+        bp.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
+        it = [m for m in same if m["source"] == "itunes"]
+        it.sort(key=lambda m: (m.get("compilation", False), m["year"] or "9999"))
+        primary = bp[0] if bp else top
+
+        best = dict(primary)
+        years = [m["year"] for m in same if m["year"]]
+        if years: best["year"] = min(years)
+        for f in ("genre", "label", "album", "bpm", "key"):
+            if not best.get(f):
+                for m in bp + it:
+                    if m.get(f): best[f] = m[f]; break
+        best["_sources"] = sorted({m["source"] for m in same}, key=lambda s: s != "beatport")
+        if not best.get("cover_url") and it:
+            best["cover_url"], best["thumb"] = it[0]["cover_url"], it[0]["thumb"]
+        best["_primary"] = next((u for u, r in self._results.items() if r is primary), None)
+        best["_best"] = True
+        best["_match"] = True
+        return best
 
     def _rebuild(self):
-        # In tags_only mode: Beatport first (best BPM/Key/Genre data for DJs)
-        # In cover/all mode: Apple Music first (best artwork)
-        if self._preset == "tags_only":
-            _order = {"beatport": 0, "soundcloud": 1, "discogs": 2, "itunes": 3}
-        else:
-            _order = {s: v["priority"] for s, v in SOURCES.items()}
-        ordered = sorted(
-            self._results.items(),
-            key=lambda x: _order.get(x[1]["source"], 9)
-        )
-        COLS = 4
-        show_cover = (self._preset != "tags_only")
-        thumb_jobs = []
-        for idx, (uid, r) in enumerate(ordered):
-            card = _Card(uid, r, show_cover=show_cover)
-            card.selected.connect(self._select)
-            self._cards[uid] = card
-            self._grid.addWidget(card, idx // COLS, idx % COLS)
-            if show_cover:
-                t = r.get("thumb") or ""
-                if t and "spacer" not in t and "vinyl" not in t:
-                    thumb_jobs.append((uid, t, r["source"]))
+        ranked = self._rank()
+        if not ranked:
+            self.status.setText("No results — try a shorter search (artist + title).")
+            return
+        best = self._best_match(ranked)
+        order = []
+        if best:
+            self._results["__best__"] = best
+            order.append("__best__")
+        # Matches: one row per source + version (compilations collapse into the
+        # original release); non-matches: the 10 closest
+        seen = {(best["source"], best["artist"].lower(), best["title"].lower())} if best else set()
+        matches = []
+        for u in ranked:
+            r = self._results[u]
+            if not r["_match"]: continue
+            k = (r["source"], r["artist"].lower(), r["title"].lower())
+            if k in seen: continue
+            seen.add(k); matches.append(u)
+        others = [u for u in ranked if not self._results[u]["_match"]][:10]
+        order += matches + others
 
-        n = len(self._cards)
-        if n == 0:
-            self.status.setText("Keine Ergebnisse gefunden."); return
-
-        src_names = " + ".join(
-            SOURCES[s]["name"] for s in ["itunes","beatport","soundcloud","discogs"]
-            if any(r["source"] == s for r in self._results.values())
-        )
+        n_match = len(matches) + (1 if best else 0)
         self.status.setText(
-            f"{n} result(s) from {src_names} — "
-            "select individually or use ⭐ Smart Match")
+            f"{n_match} matching result{'s' if n_match != 1 else ''}" if n_match
+            else "No exact match — pick the right one manually")
 
-        # Compute smart match
-        self._smart = self._compute_smart()
-        self.banner.update_meta(self._smart)
+        other_hdr_done = False
+        jobs = []
+        for uid in order:
+            r = self._results[uid]
+            if not r["_match"] and not other_hdr_done:
+                other_hdr_done = True
+                h = _lbl("OTHER RESULTS", C_TEXT3, 10, 600)
+                h.setContentsMargins(10, 14, 0, 6)
+                self._list.addWidget(h)
+            row = _ResultRow(uid, r, best=(uid == "__best__"), matched=r["_match"])
+            row.selected.connect(self._select)
+            row.activated.connect(lambda u: (self._select(u), self._apply_selection()))
+            self._rows[uid] = row
+            self._list.addWidget(row)
+            if r.get("thumb"):
+                jobs.append((uid, r["thumb"], r["source"]))
+        self._thumb_uids: dict[str, list] = {}
+        for uid, url, _ in jobs:
+            self._thumb_uids.setdefault(url, []).append(uid)
+        jobs = [(url, url, src) for url, src in {u: s_ for _, u, s_ in jobs}.items()]
 
-        # In tags_only mode: hide cover thumbnail in banner, still show metadata
-        if not show_cover:
-            self.banner.cover_lbl.hide()
+        self._select(order[0] if best else None)
+        if jobs:
+            self._loader = _ThumbLoader(jobs)
+            self._loader.loaded.connect(
+                lambda url, data: [self._set_thumb(u, data) for u in self._thumb_uids.get(url, [])])
+            self._loader.start()
+
+    def _set_thumb(self, uid: str, data: bytes):
+        pix = QPixmap(); pix.loadFromData(data)
+        if pix.isNull(): return
+        self._pix[uid] = pix
+        if uid in self._rows:
+            self._rows[uid].set_thumb(pix)
+        if uid == self._sel_uid:
+            self.p_art.setStyleSheet("background:transparent;border:none;")
+            self.p_art.setPixmap(_rounded(pix, 112, 10))
+
+    # ── preview ───────────────────────────────────────────────────────────────
+
+    def _select(self, uid: Optional[str]):
+        if self._sel_uid in self._rows:
+            self._rows[self._sel_uid].mark(False)
+        self._sel_uid = uid
+        if uid in self._rows:
+            self._rows[uid].mark(True)
+        self._show_preview(self._results.get(uid) if uid else None)
+
+    def _show_preview(self, r: Optional[dict]):
+        if not r:
+            self.p_title.setText("No result selected")
+            self.p_artist.setText("Pick a result on the left")
+            self.p_src.setText(""); self.p_badge.hide()
+            _art_placeholder(self.p_art, 112, 10)
+            for key in self.chk:
+                self._fill_field(key, "", "")
+            self._update_apply_btn()
+            return
+
+        self.p_title.setText(r.get("title", ""))
+        self.p_artist.setText(r.get("artist", ""))
+        srcs = r.get("_sources") or [r["source"]]
+        self.p_src.setText("From " + " + ".join(SOURCES[s]["name"] for s in srcs))
+        if r.get("_best"):
+            self.p_badge.setText("Best match"); self.p_badge.show()
+        elif not r.get("_match"):
+            self.p_badge.setText("Uncertain match"); self.p_badge.show()
         else:
-            self.banner.cover_lbl.show()
-            self.banner.cover_lbl.setText("⏳")
+            self.p_badge.hide()
+        pix = self._pix.get(self._sel_uid)
+        if pix:
+            self.p_art.setStyleSheet("background:transparent;border:none;")
+            self.p_art.setPixmap(_rounded(pix, 112, 10))
+        else:
+            _art_placeholder(self.p_art, 112, 10)
 
-        self.banner.show(); self.divider.show()
+        for key, _ in _FIELDS:
+            if key == "cover":
+                new = "New artwork" if r.get("cover_url") else ""
+                old = "Replaces current artwork" if self._has_cover else "No artwork yet"
+                self._fill_field(key, new, old, empty_now=not self._has_cover)
+            else:
+                val = r.get(key, "") or ""
+                if key == "key" and val: val = _key_display(val)
+                cur = (self._current.get(key) or "").strip()
+                self._fill_field(key, val, cur, empty_now=not cur)
+        self._update_apply_btn()
 
-        # Load all thumbs (including smart banner) — only in cover/all mode
-        if show_cover:
-            sm_thumb = self._smart.get("cover_thumb","")
-            if sm_thumb:
-                thumb_jobs.insert(0, ("__smart__", sm_thumb, self._smart.get("cover_src","")))
-            if thumb_jobs:
-                self._loader = _ThumbLoader(thumb_jobs)
-                self._loader.loaded.connect(self._set_thumb)
-                self._loader.start()
+    def _fill_field(self, key: str, new: str, cur: str, empty_now: bool = True):
+        c = self.chk[key]; nl = self._new_lbl[key]; ol = self._old_lbl[key]
+        c.blockSignals(True)
+        if not new:
+            nl.setText("—"); nl.setStyleSheet(f"color:{C_TEXT3};font-size:12px;background:transparent;")
+            ol.setText(""); ol.hide()
+            c.setChecked(False); c.setEnabled(False)
+        else:
+            nl.setText(new)
+            nl.setStyleSheet(f"color:{C_TEXT};font-size:12px;font-weight:500;background:transparent;")
+            same = key != "cover" and cur.lower() == new.lower()
+            c.setEnabled(not same)
+            if same:
+                ol.setText("Unchanged"); ol.show()
+                c.setChecked(False)
+            else:
+                if key == "cover":
+                    ol.setText(cur)
+                else:
+                    ol.setText(f"Currently: {cur}" if cur else "Currently empty")
+                ol.show()
+                if self._preset == "cover_only":
+                    c.setChecked(key == "cover")
+                elif self._preset == "tags_only" and key == "cover":
+                    c.setChecked(False)
+                else:
+                    c.setChecked(empty_now)
+        c.blockSignals(False)
 
-    def _set_thumb(self, uid: str, pix: QPixmap):
-        if uid == "__smart__":
-            self.banner.set_thumb(pix)
-        elif uid in self._cards:
-            self._cards[uid].set_thumb(pix)
-
-    # ── smart match logic ─────────────────────────────────────────────────────
-
-    def _compute_smart(self) -> dict:
-        rs = list(self._results.values())
-        def best(field, order):
-            for src in order:
-                for r in rs:
-                    if r["source"] == src and r.get(field):
-                        return r[field], src
-            return "", ""
-
-        cover_url, cover_src = "", ""
-        for src in ["itunes", "beatport", "soundcloud", "discogs"]:
-            for r in rs:
-                cu = r.get("cover_url","")
-                if r["source"] == src and cu and "spacer" not in cu and "vinyl" not in cu:
-                    cover_url = cu
-                    cover_src = src
-                    break
-            if cover_url: break
-
-        cover_thumb = ""
-        cover_artist = ""
-        cover_title  = ""
-        for r in rs:
-            if r["source"] == cover_src and r.get("thumb"):
-                cover_thumb  = r["thumb"]
-                cover_artist = r.get("artist", "")
-                cover_title  = r.get("title", "")
-                break
-
-        genre,  genre_src  = best("genre", ["discogs","beatport","soundcloud","itunes"])
-        label,  label_src  = best("label", ["discogs","beatport"])
-        year,   year_src   = best("year",  ["beatport","itunes","soundcloud","discogs"])
-        bpm,    _          = best("bpm",   ["beatport"])
-        key,    _          = best("key",   ["beatport"])
-
-        return {
-            "cover_url": cover_url, "cover_thumb": cover_thumb, "cover_src": cover_src,
-            "artist": cover_artist, "title": cover_title,
-            "genre": genre, "genre_src": genre_src,
-            "label": label, "label_src": label_src,
-            "year":  year,  "year_src":  year_src,
-            "bpm":   bpm,   "key":       key,
-        }
+    def _update_apply_btn(self, *_):
+        n = sum(1 for c in self.chk.values() if c.isChecked() and c.isEnabled())
+        self.ok_btn.setEnabled(bool(self._sel_uid) and n > 0)
+        self.ok_btn.setText(f"Apply {n} field{'s' if n != 1 else ''}" if n else "Apply")
 
     # ── apply ─────────────────────────────────────────────────────────────────
 
-    def _quick_apply(self):
-        """Smart Match button — apply best-of-all sources."""
-        if not self._smart: return
-        self._emit_payload(self._smart.get("cover_url",""),
-                           self._smart.get("cover_src","itunes"),
-                           self._smart)
-
     def _apply_selection(self):
-        """Apply the manually selected card."""
         if not self._sel_uid: return
         r = self._results[self._sel_uid]
-        self._emit_payload(r.get("cover_url",""), r["source"], r)
-
-    def _emit_payload(self, cover_url: str, cover_src: str, sm: dict):
         payload: dict = {}
-
-        if self.chk.get("cover") and self.chk["cover"].isChecked() and cover_url:
-            self.status.setText("⬇️  Lade Cover…")
-            self.banner.apply_btn.setEnabled(False)
-            self.ok_btn.setEnabled(False)
+        if self.chk["cover"].isChecked() and r.get("cover_url"):
+            self.foot.setText("Downloading artwork…"); self.ok_btn.setEnabled(False)
+            self.repaint()
             try:
-                h = {"User-Agent": _UA, "Accept": "image/*"}
-                if cover_src == "discogs":     h["Referer"] = "https://www.discogs.com/"
-                if cover_src == "beatport":    h["Referer"] = "https://www.beatport.com/"
-                if cover_src == "soundcloud":  h["Referer"] = "https://soundcloud.com/"
-                req = urllib.request.Request(cover_url, headers=h)
-                with urllib.request.urlopen(req, timeout=15) as r:
-                    payload["cover_data"] = r.read()
+                payload["cover_data"] = _fetch_image(r["cover_url"], r["source"], timeout=15)
                 payload["cover_mime"] = "image/jpeg"
             except Exception as e:
-                self.status.setText(f"Cover-Fehler: {e}")
-
-        for key in ("artist","title","genre","label","year","bpm","key"):
-            if key in self.chk and self.chk[key].isChecked() and sm.get(key):
-                payload[key] = sm[key]
-
+                self.foot.setText(f"Artwork download failed: {e}")
+                self._update_apply_btn()
+                return
+        for key, _ in _FIELDS:
+            if key != "cover" and self.chk[key].isChecked() and r.get(key):
+                payload[key] = r[key]
         if payload:
             self.result_selected.emit(payload)
             self.accept()
-        else:
-            self.status.setText("Nothing selected to apply.")
-            self.banner.apply_btn.setEnabled(True)
-            self.ok_btn.setEnabled(True)
-
-    def _select(self, uid: str):
-        if self._sel_uid and self._sel_uid in self._cards:
-            self._cards[self._sel_uid].mark(False)
-        self._sel_uid = uid
-        self._cards[uid].mark(True)
-        self.ok_btn.setEnabled(True)

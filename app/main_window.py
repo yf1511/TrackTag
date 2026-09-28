@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QFrame, QStyledItemDelegate,
     QApplication, QDialog,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QBuffer, QIODevice, QSize, QRect, QTimer, QSettings
+from PyQt6.QtCore import Qt, pyqtSignal, QBuffer, QIODevice, QSize, QRect, QPoint, QTimer, QSettings
 from PyQt6.QtGui import (
     QPixmap, QIcon, QAction, QKeySequence, QShortcut,
     QFont, QColor, QPen, QPainter,
@@ -48,7 +48,7 @@ def _ico(name: str, color: str = "#a1a5b3", size: int = 16) -> QIcon:
 # ── macOS titlebar CI integration ─────────────────────────────────────────────
 
 def _apply_mac_titlebar(win_id: int):
-    """Make the macOS titlebar transparent + dark to match CI (#0b0d13)."""
+    """Make the macOS titlebar transparent + dark to match C_BG (#0c0d11)."""
     import sys
     if sys.platform != "darwin":
         return
@@ -91,7 +91,7 @@ def _apply_mac_titlebar(win_id: int):
         send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
         send(ctypes.c_void_p(ns_window), sel(b"setMovableByWindowBackground:"), True)
 
-        # ── background colour = #0b0d13 ───────────────────────────────
+        # ── background colour = #0c0d11 ───────────────────────────────
         NSColor = lib.objc_getClass(b"NSColor")
         send.restype  = ctypes.c_void_p
         send.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
@@ -99,9 +99,9 @@ def _apply_mac_titlebar(win_id: int):
                          ctypes.c_double, ctypes.c_double]
         color = send(ctypes.c_void_p(NSColor),
                      sel(b"colorWithSRGBRed:green:blue:alpha:"),
-                     ctypes.c_double(0x0b / 255),
+                     ctypes.c_double(0x0c / 255),
                      ctypes.c_double(0x0d / 255),
-                     ctypes.c_double(0x13 / 255),
+                     ctypes.c_double(0x11 / 255),
                      ctypes.c_double(1.0))
 
         send.restype  = None
@@ -113,37 +113,29 @@ def _apply_mac_titlebar(win_id: int):
     except Exception as exc:
         print(f"macOS titlebar: {exc}")
 
-# ── Design tokens (matching spec) ─────────────────────────────────────────────
+# ── Design tokens (shared) ────────────────────────────────────────────────────
+from .theme import (
+    C_BG, C_SURFACE, C_SURFACE2, C_SURFACE3, C_BORDER,
+    C_BORDER2, C_TEXT, C_TEXT2, C_TEXT3, C_PRIMARY,
+    C_PRIMARY_SOFT, C_ACCENT, C_ACCENT2, C_DANGER, C_SUCCESS,
+    C_KEY_CLR, C_SEL_BG, C_SEL_LINE, _GRAD, _GRAD_HOVER,
+    _GRAD_PRESS, _BTN_PRIMARY, _BTN_SECONDARY, _BTN_GHOST,
+)
 
-C_BG       = "#0b0d13"
-C_SURFACE  = "#12141b"
-C_SURFACE2 = "#171a22"
-C_BORDER   = "#22262f"
-C_TEXT     = "#f1f3f5"
-C_TEXT2    = "#a1a5b3"
-C_TEXT3    = "#52576b"
-C_PRIMARY  = "#7c3aed"
-C_ACCENT   = "#ff2d75"
-C_ACCENT2  = "#ff8a00"
-C_KEY_CLR  = "#ff2d75"
-C_SEL_BG   = "#1d1230"
-C_SEL_LINE = "#7c3aed"
-
-# ── Key normalization (Rekordbox format) + per-key colors ─────────────────────
 
 _CAMELOT_TO_RB = {
-    "1A":"Am",  "1B":"A",
-    "2A":"Em",  "2B":"E",
-    "3A":"Bm",  "3B":"B",
-    "4A":"F#m", "4B":"F#",
-    "5A":"Dbm", "5B":"Db",
-    "6A":"Abm", "6B":"Ab",
-    "7A":"Ebm", "7B":"Eb",
-    "8A":"Bbm", "8B":"Bb",
-    "9A":"Fm",  "9B":"F",
-    "10A":"Cm", "10B":"C",
-    "11A":"Gm", "11B":"G",
-    "12A":"Dm", "12B":"D",
+    "1A":"Abm", "1B":"B",
+    "2A":"Ebm", "2B":"F#",
+    "3A":"Bbm", "3B":"Db",
+    "4A":"Fm",  "4B":"Ab",
+    "5A":"Cm",  "5B":"Eb",
+    "6A":"Gm",  "6B":"Bb",
+    "7A":"Dm",  "7B":"F",
+    "8A":"Am",  "8B":"C",
+    "9A":"Em",  "9B":"G",
+    "10A":"Bm", "10B":"D",
+    "11A":"F#m","11B":"A",
+    "12A":"Dbm","12B":"E",
 }
 
 _KEY_NORM = {
@@ -238,6 +230,13 @@ COLUMNS = [
     ("composer",    "COMPOSER"),
     ("sample_rate_str","SAMPLERATE"),
 ]
+_DEFAULT_COL_W = {
+    "title": 260, "artist": 190, "album": 160, "genre": 140, "label": 140,
+    "bpm": 64, "key": 72, "year": 64, "bitrate_str": 84, "duration_str": 72,
+    "filename": 260, "album_artist": 160, "track": 64, "comment": 180,
+    "composer": 150, "sample_rate_str": 96,
+}
+
 _NUM_COL   = 0
 _COVER_COL = 1
 _TITLE_COL = 2
@@ -249,20 +248,22 @@ _KEY_COL   = 8
 
 _INPUT = f"""
     QLineEdit {{
-        background:{C_SURFACE}; color:{C_TEXT};
-        border:1px solid {C_BORDER}; border-radius:8px;
+        background:{C_SURFACE2}; color:{C_TEXT};
+        border:1px solid {C_BORDER}; border-radius:7px;
         padding:0 10px; font-size:12px;
         selection-background-color:{C_PRIMARY};
     }}
-    QLineEdit:focus {{ border-color:{C_PRIMARY}; background:{C_SURFACE2}; }}
-    QLineEdit:disabled {{ color:{C_TEXT3}; border-color:{C_BG}; }}
+    QLineEdit:hover {{ border-color:{C_BORDER2}; }}
+    QLineEdit:focus {{ border-color:{C_PRIMARY}; background:{C_BG}; }}
+    QLineEdit:disabled {{ color:{C_TEXT3}; background:{C_SURFACE}; border-color:{C_SURFACE2}; }}
 """
 _COMBO = f"""
     QComboBox {{
-        background:{C_SURFACE}; color:{C_TEXT};
-        border:1px solid {C_BORDER}; border-radius:8px;
+        background:{C_SURFACE2}; color:{C_TEXT};
+        border:1px solid {C_BORDER}; border-radius:7px;
         padding:0 10px; font-size:12px;
     }}
+    QComboBox:hover {{ border-color:{C_BORDER2}; }}
     QComboBox:focus {{ border-color:{C_PRIMARY}; }}
     QComboBox:disabled {{ color:{C_TEXT3}; }}
     QComboBox::drop-down {{ border:none; width:20px; }}
@@ -305,15 +306,34 @@ class SortItem(QTableWidgetItem):
         return self.text().lower() < other.text().lower()
 
 
+def _rounded_pixmap(pix: QPixmap, size: int, radius: float) -> QPixmap:
+    """Scale-to-fill a square and clip it to a rounded rect (HiDPI-aware)."""
+    from PyQt6.QtGui import QPainterPath
+    dpr = 2.0
+    px = int(size * dpr)
+    src = pix.scaled(px, px, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                     Qt.TransformationMode.SmoothTransformation)
+    out = QPixmap(px, px); out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out); p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    path = QPainterPath(); path.addRoundedRect(0, 0, px, px, radius*dpr, radius*dpr)
+    p.setClipPath(path)
+    p.drawPixmap((px-src.width())//2, (px-src.height())//2, src)
+    p.end()
+    out.setDevicePixelRatio(dpr)
+    return out
+
+
 class TrackDelegate(QStyledItemDelegate):
     SUBTITLE_ROLE = Qt.ItemDataRole.UserRole + 2
+    ROW_H = 56
+    ART   = 40
 
-    _EVEN     = QColor(C_BG)
-    _ODD      = QColor(C_SURFACE)
-    _HOVER    = QColor("#161922")
+    _BG       = QColor(C_BG)
+    _HOVER    = QColor(C_SURFACE)
     _SEL_BG   = QColor(C_SEL_BG)
     _SEL_LINE = QColor(C_SEL_LINE)
-    _KEY      = QColor(C_KEY_CLR)
+    _SEP      = QColor(C_SURFACE2)
+    _ART_BG   = QColor(C_SURFACE2)
     _TEXT     = QColor(C_TEXT)
     _TEXT2    = QColor(C_TEXT2)
     _TEXT3    = QColor(C_TEXT3)
@@ -325,75 +345,87 @@ class TrackDelegate(QStyledItemDelegate):
     def paint(self, painter, option, index):
         from PyQt6.QtWidgets import QStyle
         painter.save()
-        row, col = index.row(), index.column()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        col = index.column()
         sel  = bool(option.state & QStyle.StateFlag.State_Selected)
         hov  = bool(option.state & QStyle.StateFlag.State_MouseOver)
-        ncols = self._table.columnCount()
+        rect = option.rect
 
-        # Background
-        if sel:   painter.fillRect(option.rect, self._SEL_BG)
-        elif hov: painter.fillRect(option.rect, self._HOVER)
-        else:     painter.fillRect(option.rect, self._ODD if row % 2 else self._EVEN)
+        # Background + hairline separator
+        painter.fillRect(rect, self._SEL_BG if sel else (self._HOVER if hov else self._BG))
+        painter.fillRect(rect.left(), rect.bottom(), rect.width(), 1, self._SEP)
+        # Accent bar on the left edge of the selected row
+        if sel and col == 0:
+            painter.fillRect(rect.left(), rect.top(), 2, rect.height()-1, self._SEL_LINE)
 
-        # Selection border (top/bottom + edges)
-        if sel:
-            pen = QPen(self._SEL_LINE, 1.5)
-            painter.setPen(pen)
-            r = option.rect
-            painter.drawLine(r.left(), r.top(), r.right(), r.top())
-            painter.drawLine(r.left(), r.bottom()-1, r.right(), r.bottom()-1)
-            if col == 0:
-                painter.drawLine(r.left()+1, r.top()+1, r.left()+1, r.bottom()-2)
-            if col == ncols - 1:
-                painter.drawLine(r.right()-1, r.top()+1, r.right()-1, r.bottom()-2)
-
-        r = option.rect.adjusted(8, 0, -8, 0)
+        r = rect.adjusted(10, 0, -10, 0)
         text = str(index.data(Qt.ItemDataRole.DisplayRole) or "")
+        base = QFont(option.font); base.setPixelSize(12)
 
         if col == _NUM_COL:
-            painter.setPen(self._TEXT3)
-            painter.drawText(option.rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.setFont(base)
+            painter.setPen(self._SEL_LINE if sel else self._TEXT3)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
         elif col == _COVER_COL:
-            icon = index.data(Qt.ItemDataRole.DecorationRole)
-            if isinstance(icon, QIcon):
-                pix = icon.pixmap(38, 38)
-                if not pix.isNull():
-                    px = option.rect.x() + (option.rect.width()-pix.width())//2
-                    py = option.rect.y() + (option.rect.height()-pix.height())//2
-                    painter.drawPixmap(px, py, pix)
+            ax = rect.x() + (rect.width()-self.ART)//2
+            ay = rect.y() + (rect.height()-self.ART)//2
+            pix = index.data(Qt.ItemDataRole.DecorationRole)
+            if isinstance(pix, QPixmap) and not pix.isNull():
+                painter.drawPixmap(ax, ay, pix)
+            else:
+                painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(self._ART_BG)
+                painter.drawRoundedRect(ax, ay, self.ART, self.ART, 6, 6)
+                try:
+                    _ico("fa5s.music", C_TEXT3).paint(
+                        painter, QRect(ax+13, ay+13, 14, 14))
+                except Exception:
+                    pass
 
         elif col == _TITLE_COL:
             sub = index.data(self.SUBTITLE_ROLE) or ""
-            mid = option.rect.center().y()
-            f1 = QFont(option.font); f1.setPixelSize(13)
+            main = text[:-len(sub)].rstrip() if sub and text.endswith(sub) else text
+            mid = rect.center().y()
+            f1 = QFont(base); f1.setPixelSize(13); f1.setWeight(QFont.Weight.Medium)
+            painter.setFont(f1); painter.setPen(self._TEXT)
+            fm = painter.fontMetrics()
             if sub:
-                f2 = QFont(option.font); f2.setPixelSize(11)
-                painter.setFont(f1); painter.setPen(self._TEXT)
-                painter.drawText(QRect(r.left(), mid-13, r.width(), 16),
-                    Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter, text)
+                painter.drawText(QRect(r.left(), mid-17, r.width(), 17),
+                    Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,
+                    fm.elidedText(main, Qt.TextElideMode.ElideRight, r.width()))
+                f2 = QFont(base); f2.setPixelSize(11)
                 painter.setFont(f2); painter.setPen(self._TEXT2)
-                painter.drawText(QRect(r.left(), mid+3, r.width(), 14),
-                    Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter, sub)
+                painter.drawText(QRect(r.left(), mid+2, r.width(), 15),
+                    Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,
+                    painter.fontMetrics().elidedText(sub.strip("() "),
+                        Qt.TextElideMode.ElideRight, r.width()))
             else:
-                painter.setFont(f1); painter.setPen(self._TEXT)
-                elided = painter.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, r.width())
-                painter.drawText(r, Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter, elided)
+                painter.drawText(r, Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter,
+                    fm.elidedText(text, Qt.TextElideMode.ElideRight, r.width()))
 
         elif col == _KEY_COL:
-            key_color = QColor(KEY_COLORS.get(text, C_KEY_CLR))
-            painter.setPen(key_color); painter.setFont(option.font)
-            painter.drawText(r, Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter, text)
+            if text:
+                kc = QColor(KEY_COLORS.get(text, C_KEY_CLR))
+                f = QFont(base); f.setPixelSize(11); f.setWeight(QFont.Weight.DemiBold)
+                painter.setFont(f)
+                w = painter.fontMetrics().horizontalAdvance(text) + 16
+                chip = QRect(r.left(), rect.center().y()-10, w, 20)
+                bg = QColor(kc); bg.setAlpha(38)
+                painter.setPen(Qt.PenStyle.NoPen); painter.setBrush(bg)
+                painter.drawRoundedRect(chip, 10, 10)
+                painter.setPen(kc)
+                painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, text)
 
         else:
-            painter.setPen(self._TEXT); painter.setFont(option.font)
+            painter.setFont(base)
+            painter.setPen(self._TEXT if col == 3 else self._TEXT2)   # artist brighter
             elided = painter.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, r.width())
             painter.drawText(r, Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter, elided)
 
         painter.restore()
 
     def sizeHint(self, option, index):
-        return QSize(super().sizeHint(option, index).width(), 50)
+        return QSize(super().sizeHint(option, index).width(), self.ROW_H)
 
 
 # ── Cover label ───────────────────────────────────────────────────────────────
@@ -401,12 +433,13 @@ class TrackDelegate(QStyledItemDelegate):
 class CoverLabel(QLabel):
     cover_changed = pyqtSignal(bytes, str)
     clicked = pyqtSignal()
-    _SIZE = 268
-    _IDLE   = (f"QLabel{{border:2px dashed {C_BORDER};border-radius:12px;"
-               f"background:{C_SURFACE};color:{C_TEXT3};font-size:11px;}}")
-    _HOVER  = (f"QLabel{{border:2px dashed {C_PRIMARY};border-radius:12px;"
-               f"background:{C_SEL_BG};color:{C_PRIMARY};font-size:11px;}}")
-    _FILLED = (f"QLabel{{border:none;border-radius:12px;background:{C_SURFACE};}}")
+    _SIZE = 256
+    _RADIUS = 12
+    _IDLE   = (f"QLabel{{border:1px dashed {C_BORDER2};border-radius:12px;"
+               f"background:{C_SURFACE2};color:{C_TEXT3};font-size:12px;}}")
+    _HOVER  = (f"QLabel{{border:1px dashed {C_PRIMARY};border-radius:12px;"
+               f"background:{C_SEL_BG};color:#c4b5fd;font-size:12px;}}")
+    _FILLED = ("QLabel{border:none;background:transparent;}")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -420,18 +453,18 @@ class CoverLabel(QLabel):
 
     def _idle(self):
         self._has = False; self.clear()
-        self.setText("Drop cover here\nor click\n\n⌘V to paste")
+        self.setText("Drop artwork here\nor click to choose\n\n⌘V to paste")
         self.setStyleSheet(self._IDLE)
 
     def set_cover_data(self, data: bytes, mime: str = "image/jpeg"):
         pix = QPixmap(); pix.loadFromData(data)
         if pix.isNull(): return
-        inner = self._SIZE - 4
-        self.setPixmap(pix.scaled(inner, inner,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation))
-        self.setStyleSheet(self._FILLED); self._has = True
+        self.show_pixmap(pix)
         self.cover_changed.emit(data, mime)
+
+    def show_pixmap(self, pix: QPixmap):
+        self.setPixmap(_rounded_pixmap(pix, self._SIZE, self._RADIUS))
+        self.setStyleSheet(self._FILLED); self._has = True
 
     def clear_cover(self): self._idle()
 
@@ -564,7 +597,7 @@ class ProActivateDialog(QDialog):
             }}
             QPushButton:hover{{
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #8b46ff, stop:1 #ff4d88);
+                    stop:0 #9d74f8, stop:1 #f062ab);
             }}
             QPushButton:disabled{{background:{C_SURFACE2};color:{C_TEXT3};}}
         """)
@@ -600,74 +633,9 @@ class ProActivateDialog(QDialog):
             self._act_btn.setText("Activate")
             self._status.setText(err or "Invalid license key.")
             self._status.setStyleSheet(
-                f"color:{C_ACCENT};font-size:11px;border:none;background:transparent;")
+                f"color:{C_DANGER};font-size:11px;border:none;background:transparent;")
             self._field.setStyleSheet(
-                self._field.styleSheet() + f"QLineEdit{{border-color:{C_ACCENT};}}")
-
-
-# ── Sidebar drag-drop zone ────────────────────────────────────────────────────
-
-class SidebarDropZone(QFrame):
-    files_dropped = pyqtSignal(list)
-
-    _IDLE  = (f"QFrame{{border:2px dashed {C_BORDER};border-radius:12px;"
-              f"background:transparent;}}")
-    _HOVER = (f"QFrame{{border:2px dashed {C_PRIMARY};border-radius:12px;"
-              f"background:rgba(124,58,237,0.10);}}")
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setFixedHeight(106)
-        self.setStyleSheet(self._IDLE)
-        lay = QVBoxLayout(self); lay.setContentsMargins(10,10,10,10); lay.setSpacing(5)
-        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        self._ico_lbl = QLabel(); self._ico_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._ico_lbl.setStyleSheet("border:none;background:transparent;")
-        self._ico_hover = None
-        try:
-            self._ico_lbl.setPixmap(
-                _ico("fa5s.cloud-upload-alt", C_TEXT3).pixmap(24, 24))
-            self._ico_hover = _ico("fa5s.cloud-upload-alt", C_PRIMARY).pixmap(24, 24)
-        except Exception:
-            pass
-
-        lbl = QLabel("Drop audio files here")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet(
-            f"color:{C_TEXT2};font-size:12px;font-weight:600;"
-            f"border:none;background:transparent;")
-        sub = QLabel("MP3  ·  FLAC  ·  WAV  ·  AIFF  ·  M4A")
-        sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        sub.setStyleSheet(
-            f"color:{C_TEXT3};font-size:10px;letter-spacing:0.3px;"
-            f"border:none;background:transparent;")
-        lay.addWidget(self._ico_lbl); lay.addWidget(lbl); lay.addWidget(sub)
-
-    def dragEnterEvent(self, e):
-        if e.mimeData().hasUrls():
-            e.acceptProposedAction()
-            self.setStyleSheet(self._HOVER)
-            if self._ico_hover:
-                self._ico_lbl.setPixmap(self._ico_hover)
-
-    def dragLeaveEvent(self, _):
-        self.setStyleSheet(self._IDLE)
-        try:
-            self._ico_lbl.setPixmap(_ico("fa5s.cloud-upload-alt", C_TEXT3).pixmap(24, 24))
-        except Exception:
-            pass
-
-    def dropEvent(self, e):
-        self.setStyleSheet(self._IDLE)
-        try:
-            self._ico_lbl.setPixmap(_ico("fa5s.cloud-upload-alt", C_TEXT3).pixmap(24, 24))
-        except Exception:
-            pass
-        paths = _audio_paths_from_urls(e.mimeData().urls())
-        if paths: self.files_dropped.emit(paths)
-        e.acceptProposedAction()
+                self._field.styleSheet() + f"QLineEdit{{border-color:{C_DANGER};}}")
 
 
 # ── Full-window drag overlay ──────────────────────────────────────────────────
@@ -686,19 +654,19 @@ class DragOverlay(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         # Semi-transparent purple fill
-        painter.fillRect(self.rect(), QColor(124, 58, 237, 28))
+        painter.fillRect(self.rect(), QColor(12, 13, 17, 200))
 
         # Dashed border (inset 16px)
         inset = 16
         r = self.rect().adjusted(inset, inset, -inset, -inset)
-        pen = QPen(QColor(124, 58, 237, 180), 2, Qt.PenStyle.DashLine)
+        pen = QPen(QColor(139, 92, 246, 200), 2, Qt.PenStyle.DashLine)
         pen.setDashPattern([8, 6])
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(r, 16, 16)
 
         # Centered icon + text
-        painter.setPen(QColor(198, 168, 255, 220))
+        painter.setPen(QColor(237, 237, 241))
         font = QFont(self.font()); font.setPointSize(15); font.setBold(True)
         painter.setFont(font)
         painter.drawText(self.rect().adjusted(0, 20, 0, 0),
@@ -706,7 +674,7 @@ class DragOverlay(QWidget):
                          "Drop audio files here")
         font2 = QFont(self.font()); font2.setPointSize(11)
         painter.setFont(font2)
-        painter.setPen(QColor(167, 139, 250, 160))
+        painter.setPen(QColor(155, 157, 171))
         painter.drawText(self.rect().adjusted(0, 60, 0, 0),
                          Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
                          "MP3  ·  FLAC  ·  WAV  ·  AIFF  ·  M4A")
@@ -720,75 +688,44 @@ class NavItem(QWidget):
     def __init__(self, label: str, fa_icon: str, count: str = "0",
                  active: bool = False, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(38)
+        self.setFixedHeight(34)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._active = active
-        self._apply_style(active)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._fa_icon = fa_icon
 
-        row = QHBoxLayout(self); row.setContentsMargins(12,0,10,0); row.setSpacing(8)
-
-        # Icon using qtawesome
+        row = QHBoxLayout(self); row.setContentsMargins(10,0,10,0); row.setSpacing(10)
         self._ico_lbl = QLabel()
-        self._ico_lbl.setFixedSize(16, 16)
+        self._ico_lbl.setFixedSize(14, 14)
         self._ico_lbl.setStyleSheet("border:none;background:transparent;")
-        try:
-            color = C_PRIMARY if active else C_TEXT3
-            self._ico_lbl.setPixmap(_ico(fa_icon, color).pixmap(14, 14))
-        except Exception:
-            pass
-
         self._txt = QLabel(label)
-        self._txt.setStyleSheet(
-            f"color:{'#f1f3f5' if active else '#a1a5b3'};"
-            f"font-size:13px;font-weight:{'600' if active else '400'};"
-            f"background:transparent;border:none;")
-
         self._badge = QLabel(count)
-        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._badge.setFixedHeight(20); self._badge.setMinimumWidth(26)
-        self._badge.setStyleSheet(
-            f"background:{'rgba(124,58,237,0.3)' if active else C_SURFACE2};"
-            f"color:{'#c4b5fd' if active else C_TEXT3};"
-            f"font-size:10px;font-weight:700;padding:0 6px;"
-            f"border-radius:10px;border:none;")
-
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter)
+        self._badge.setMinimumWidth(20)
         row.addWidget(self._ico_lbl)
         row.addWidget(self._txt, 1)
         row.addWidget(self._badge)
-
-    def _apply_style(self, active: bool):
-        self.setStyleSheet(f"""
-            NavItem{{
-                background:{'rgba(124,58,237,0.15)' if active else 'transparent'};
-                border-radius:8px;
-                border-left:3px solid {'#7c3aed' if active else 'transparent'};
-                border-top:none;border-right:none;border-bottom:none;
-            }}
-            NavItem:hover{{background:rgba(124,58,237,0.10);}}
-        """)
+        self.set_active(active)
 
     def set_count(self, n: int):
         self._badge.setText(str(n))
 
     def set_active(self, active: bool):
         self._active = active
-        self._apply_style(active)
-        color = C_PRIMARY if active else C_TEXT3
+        self.setStyleSheet(f"""
+            NavItem{{background:{C_SURFACE2 if active else 'transparent'};border-radius:7px;}}
+            NavItem:hover{{background:{C_SURFACE2};}}
+        """)
         try:
             self._ico_lbl.setPixmap(
-                _ico(self._fa_icon if hasattr(self,'_fa_icon') else "fa5s.music",
-                     color).pixmap(14, 14))
+                _ico(self._fa_icon, C_PRIMARY if active else C_TEXT3).pixmap(13, 13))
         except Exception:
             pass
         self._txt.setStyleSheet(
-            f"color:{'#f1f3f5' if active else '#a1a5b3'};"
-            f"font-size:13px;font-weight:{'600' if active else '400'};"
-            f"background:transparent;border:none;")
+            f"color:{C_TEXT if active else C_TEXT2};font-size:13px;"
+            f"font-weight:{'600' if active else '400'};background:transparent;border:none;")
         self._badge.setStyleSheet(
-            f"background:{'rgba(124,58,237,0.3)' if active else C_SURFACE2};"
-            f"color:{'#c4b5fd' if active else C_TEXT3};"
-            f"font-size:10px;font-weight:700;padding:0 6px;"
-            f"border-radius:10px;border:none;")
+            f"color:{C_TEXT2 if active else C_TEXT3};font-size:11px;"
+            f"background:transparent;border:none;")
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -800,20 +737,29 @@ class NavItem(QWidget):
 
 class NavSidebar(QWidget):
     add_files_clicked    = pyqtSignal()
-    files_dropped        = pyqtSignal(list)
     nav_filter_changed   = pyqtSignal(str, str)  # (mode, value): ('all','') | ('genre','Tech House')
     pro_activated        = pyqtSignal()
 
     _PRO_BADGE_STYLE = (
-        f"background:qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-        f"stop:0 #7c3aed,stop:1 #ff2d75);"
-        f"color:#fff;font-size:8px;font-weight:800;"
+        f"background:{_GRAD};"
+        f"color:#fff;font-size:9px;font-weight:800;padding:0 6px;"
         f"border-radius:4px;border:none;letter-spacing:0.8px;")
+    _VERSION_STYLE = (
+        f"background:transparent;color:{C_TEXT3};font-size:11px;font-weight:500;"
+        f"border:none;")
+    _ACT_STYLE = _BTN_GHOST + "QPushButton{text-align:left;padding-left:8px;font-size:12px;}"
+    _ACT_ON_STYLE = (
+        f"QPushButton{{background:transparent;color:{C_SUCCESS};border:none;border-radius:8px;"
+        f"font-size:12px;font-weight:500;text-align:left;padding-left:8px;}}"
+        f"QPushButton:hover{{background:rgba(34,197,94,0.10);}}")
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(228)
-        self.setStyleSheet(f"background:{C_SURFACE};")
+        self.setFixedWidth(232)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setObjectName("navSidebar")
+        self.setStyleSheet(
+            f"QWidget#navSidebar{{background:{C_BG};border-right:1px solid {C_BORDER};}}")
         self._nav_all    = None
         self._beta_lbl   = None
         self._genre_navs: dict[str, NavItem] = {}
@@ -843,75 +789,48 @@ class NavSidebar(QWidget):
         root = QVBoxLayout(self); root.setContentsMargins(0,0,0,0); root.setSpacing(0)
 
         # ── Header ──────────────────────────────────────────────────────
-        hdr = QFrame(); hdr.setFixedHeight(64)
+        hdr = QFrame(); hdr.setFixedHeight(60)
         hdr.setStyleSheet(
-            f"QFrame{{background:{C_BG};border-bottom:1px solid {C_BORDER};}}")
-        hl = QHBoxLayout(hdr); hl.setContentsMargins(16,0,16,0); hl.setSpacing(8)
+            f"QFrame{{background:transparent;border:none;border-bottom:1px solid {C_BORDER};}}")
+        hl = QHBoxLayout(hdr); hl.setContentsMargins(18,0,16,0); hl.setSpacing(10)
         if os.path.exists(_ICON_PATH):
             il = QLabel()
-            il.setPixmap(QPixmap(_ICON_PATH).scaled(28,28,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation))
-            il.setFixedSize(28,28)
+            il.setPixmap(_rounded_pixmap(QPixmap(_ICON_PATH), 26, 7))
+            il.setFixedSize(26,26)
             il.setStyleSheet("border:none;background:transparent;")
             hl.addWidget(il)
         nl = QLabel("TrackTag")
         nl.setStyleSheet(
-            f"color:{C_TEXT};font-size:16px;font-weight:700;"
+            f"color:{C_TEXT};font-size:15px;font-weight:700;"
             f"background:transparent;border:none;")
         hl.addWidget(nl)
-
         self._beta_lbl = QLabel(f"v{_APP_VERSION}")
         self._beta_lbl.setFixedHeight(18)
-        self._beta_lbl.setContentsMargins(6,0,6,0)
         self._beta_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._beta_lbl.setStyleSheet(
-            f"background:{C_SURFACE2};color:{C_TEXT2};font-size:8px;font-weight:800;"
-            f"border-radius:4px;border:1px solid {C_BORDER};letter-spacing:0.8px;")
+        self._beta_lbl.setStyleSheet(self._VERSION_STYLE)
         hl.addWidget(self._beta_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         hl.addStretch()
         root.addWidget(hdr)
 
         # ── Content ──────────────────────────────────────────────────────
         content = QWidget()
-        content.setStyleSheet(f"background:{C_SURFACE};border:none;")
+        content.setStyleSheet("background:transparent;border:none;")
         cl = QVBoxLayout(content)
-        cl.setContentsMargins(12,14,12,14); cl.setSpacing(0)
-
-        # ── Drop zone (TOP — above Add Files) ────────────────────────────
-        drop = SidebarDropZone()
-        drop.files_dropped.connect(self.files_dropped.emit)
-        cl.addWidget(drop)
-        cl.addSpacing(10)
+        cl.setContentsMargins(12,16,12,14); cl.setSpacing(0)
 
         # Add Files button
-        add = QPushButton()
-        add.setFixedHeight(40)
-        add.setText("  Add Files")
+        add = QPushButton("  Add Files")
+        add.setFixedHeight(36)
+        add.setToolTip("Add files (⌘O) — or drop them anywhere on the window")
         try:
-            add.setIcon(_ico("fa5s.plus", "#ffffff"))
-            add.setIconSize(QSize(13, 13))
+            add.setIcon(_ico("fa5s.plus", C_TEXT))
+            add.setIconSize(QSize(11, 11))
         except Exception:
-            add.setText("+ Add Files")
-        add.setStyleSheet(f"""
-            QPushButton{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_PRIMARY}, stop:1 {C_ACCENT});
-                color:#fff;border:none;border-radius:10px;
-                font-weight:700;font-size:13px;text-align:center;
-            }}
-            QPushButton:hover{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #8b46ff, stop:1 #ff4d88);
-            }}
-            QPushButton:pressed{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #6d28d9, stop:1 #e01060);
-            }}
-        """)
+            add.setText("+  Add Files")
+        add.setStyleSheet(_BTN_SECONDARY + "QPushButton{font-size:13px;}")
         add.clicked.connect(self.add_files_clicked.emit)
         cl.addWidget(add)
-        cl.addSpacing(20)
+        cl.addSpacing(24)
 
         # Nav items (All Tracks kept for reference but not added to layout)
         self._nav_all = NavItem("All Tracks", "fa5s.music", "0", active=True)
@@ -919,20 +838,24 @@ class NavSidebar(QWidget):
 
         # ── Genres section ────────────────────────────────────────────────
         genres_hdr_row = QHBoxLayout()
-        genres_hdr_row.setContentsMargins(0, 0, 0, 0); genres_hdr_row.setSpacing(0)
+        genres_hdr_row.setContentsMargins(10, 0, 4, 0); genres_hdr_row.setSpacing(0)
         g_lbl = QLabel("GENRES")
         g_lbl.setStyleSheet(
-            f"color:{C_TEXT3};font-size:9px;font-weight:700;"
-            f"letter-spacing:1.4px;background:transparent;border:none;")
+            f"color:{C_TEXT3};font-size:10px;font-weight:600;"
+            f"letter-spacing:1.2px;background:transparent;border:none;")
         genres_hdr_row.addWidget(g_lbl)
         genres_hdr_row.addStretch()
-        add_genre_btn = QPushButton("+")
+        add_genre_btn = QPushButton()
         add_genre_btn.setFixedSize(22, 22)
+        try:
+            add_genre_btn.setIcon(_ico("fa5s.plus", C_TEXT3))
+            add_genre_btn.setIconSize(QSize(9, 9))
+        except Exception:
+            add_genre_btn.setText("+")
         add_genre_btn.setStyleSheet(f"""
-            QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};border:1px solid {C_BORDER};
-                border-radius:6px;font-size:14px;font-weight:600;padding:0;}}
-            QPushButton:hover{{background:{C_BORDER};color:{C_TEXT};}}
-            QPushButton:pressed{{background:{C_PRIMARY};color:#fff;border-color:{C_PRIMARY};}}
+            QPushButton{{background:transparent;color:{C_TEXT3};border:none;
+                border-radius:6px;padding:0;}}
+            QPushButton:hover{{background:{C_SURFACE2};}}
         """)
         add_genre_btn.setToolTip("Add genre")
         add_genre_btn.clicked.connect(self._add_genre_prompt)
@@ -940,70 +863,56 @@ class NavSidebar(QWidget):
         cl.addLayout(genres_hdr_row)
         cl.addSpacing(6)
 
-        # Container for dynamic genre NavItems
+        # Container for dynamic genre NavItems (scrolls when the list gets long)
         self._genre_container = QWidget()
         self._genre_container.setStyleSheet("background:transparent;border:none;")
         self._genre_vbox = QVBoxLayout(self._genre_container)
-        self._genre_vbox.setContentsMargins(0, 0, 0, 0); self._genre_vbox.setSpacing(2)
+        self._genre_vbox.setContentsMargins(0, 0, 0, 0); self._genre_vbox.setSpacing(1)
+        self._genre_vbox.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._rebuild_genre_navs()
-        cl.addWidget(self._genre_container)
-        cl.addStretch()
+        gscroll = QScrollArea(); gscroll.setWidgetResizable(True)
+        gscroll.setFrameShape(QFrame.Shape.NoFrame)
+        gscroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        gscroll.setStyleSheet("QScrollArea{background:transparent;border:none;}")
+        gscroll.setWidget(self._genre_container)
+        cl.addWidget(gscroll, 1)
+        cl.addSpacing(12)
 
-        # ── Activate Pro button (opens popup) ────────────────────────────
-        act_btn = QPushButton()
-        act_btn.setFixedHeight(34)
-        act_btn.setText("  Activate License")
-        try:
-            act_btn.setIcon(_ico("fa5s.key", C_ACCENT2))
-            act_btn.setIconSize(QSize(12, 12))
-        except Exception:
-            act_btn.setText("Activate License")
-        act_btn.setStyleSheet(f"""
-            QPushButton{{
-                background:{C_SURFACE2};color:{C_TEXT2};
-                border:1px solid {C_BORDER};border-radius:8px;
-                font-size:11px;font-weight:600;text-align:left;padding-left:10px;
-            }}
-            QPushButton:hover{{
-                background:{C_BORDER};color:{C_TEXT};
-                border-color:{C_ACCENT2};
-            }}
-        """)
-        act_btn.clicked.connect(self._open_activate_dialog)
-        self._act_btn_ref = act_btn
-        cl.addWidget(act_btn)
-        cl.addSpacing(8)
-
-        # ── Upgrade to Pro card ──────────────────────────────────────────
+        # ── Pro card: upgrade + license in one quiet block ───────────────
         card = QFrame(); card.setObjectName("upgradeCard")
         card.setStyleSheet(f"""
-            QFrame#upgradeCard{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:1,
-                    stop:0 rgba(124,58,237,0.18), stop:1 rgba(255,45,117,0.12));
-                border-radius:12px;
-                border:1px solid rgba(124,58,237,0.35);
-            }}
+            QFrame#upgradeCard{{background:{C_SURFACE};border-radius:12px;
+                border:1px solid {C_BORDER};}}
             QFrame#upgradeCard QLabel{{border:none;background:transparent;}}
         """)
         ccl = QVBoxLayout(card)
-        ccl.setContentsMargins(14,10,14,10); ccl.setSpacing(4)
-        ct1 = QLabel("Upgrade to Pro")
-        ct1.setStyleSheet(f"color:{C_TEXT};font-size:12px;font-weight:700;")
-        ct2 = QLabel("Unlock all powerful features")
-        ct2.setStyleSheet(f"color:{C_TEXT2};font-size:10px;")
-        upbtn = QPushButton("Get Pro  →"); upbtn.setFixedHeight(40)
-        upbtn.setStyleSheet(f"""
-            QPushButton{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_PRIMARY},stop:1 {C_ACCENT});
-                color:#fff;border:none;border-radius:10px;
-                font-size:13px;font-weight:700;
-            }}
-            QPushButton:hover{{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                stop:0 #8b46ff,stop:1 #ff4d88);}}
-        """)
-        ccl.addWidget(ct1); ccl.addWidget(ct2); ccl.addWidget(upbtn)
+        ccl.setContentsMargins(14,14,14,12); ccl.setSpacing(3)
+        ct1 = QLabel("TrackTag Pro")
+        ct1.setStyleSheet(f"color:{C_TEXT};font-size:13px;font-weight:600;")
+        ct2 = QLabel("Automatic tag & cover search")
+        ct2.setStyleSheet(f"color:{C_TEXT2};font-size:11px;")
+        upbtn = QPushButton("Get Pro"); upbtn.setFixedHeight(32)
+        upbtn.setCursor(Qt.CursorShape.PointingHandCursor)
+        upbtn.setStyleSheet(_BTN_PRIMARY + "QPushButton{font-size:12px;}")
+        upbtn.clicked.connect(lambda: subprocess.Popen(
+            ["open", "https://yf1511.github.io/tracktag/#pricing"]))
+        ccl.addWidget(ct1); ccl.addWidget(ct2); ccl.addSpacing(10); ccl.addWidget(upbtn)
+        self._upgrade_card = card
         cl.addWidget(card)
+        cl.addSpacing(6)
+
+        # ── License button ───────────────────────────────────────────────
+        act_btn = QPushButton("  Activate License")
+        act_btn.setFixedHeight(30)
+        try:
+            act_btn.setIcon(_ico("fa5s.key", C_TEXT3))
+            act_btn.setIconSize(QSize(11, 11))
+        except Exception:
+            pass
+        act_btn.setStyleSheet(self._ACT_STYLE)
+        act_btn.clicked.connect(self._open_activate_dialog)
+        self._act_btn_ref = act_btn
+        cl.addWidget(act_btn)
         root.addWidget(content, 1)
 
     def _select(self, mode: str, value: str = ""):
@@ -1075,12 +984,6 @@ class NavSidebar(QWidget):
 
     def _genre_context_menu(self, genre: str, nav: "NavItem", pos):
         menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid {C_BORDER};
-                border-radius:8px;padding:4px 0;}}
-            QMenu::item{{padding:6px 22px;}}
-            QMenu::item:selected{{background:{C_PRIMARY};border-radius:4px;color:white;}}
-        """)
         rm = menu.addAction(f'Remove "{genre}"')
         action = menu.exec(nav.mapToGlobal(pos))
         if action == rm:
@@ -1124,10 +1027,10 @@ class NavSidebar(QWidget):
 
         deact = QPushButton("Deactivate"); deact.setFixedHeight(38)
         deact.setStyleSheet(f"""
-            QPushButton{{background:rgba(255,45,117,0.15);color:{C_ACCENT};
-                border:1px solid rgba(255,45,117,0.3);border-radius:9px;
+            QPushButton{{background:rgba(244,63,94,0.15);color:{C_DANGER};
+                border:1px solid rgba(244,63,94,0.3);border-radius:9px;
                 font-size:13px;font-weight:700;}}
-            QPushButton:hover{{background:rgba(255,45,117,0.25);}}
+            QPushButton:hover{{background:rgba(244,63,94,0.25);}}
         """)
         deact.clicked.connect(dlg.accept)
         row.addWidget(keep, 1); row.addWidget(deact, 1)
@@ -1143,20 +1046,18 @@ class NavSidebar(QWidget):
         if self._beta_lbl:
             self._beta_lbl.setText("PRO")
             self._beta_lbl.setStyleSheet(self._PRO_BADGE_STYLE)
+        if getattr(self, '_upgrade_card', None):
+            self._upgrade_card.hide()
         if hasattr(self, '_act_btn_ref'):
-            self._act_btn_ref.setText("  Pro Active  —  click to deactivate")
+            self._act_btn_ref.setText("  Pro active")
+            self._act_btn_ref.setToolTip("Click to deactivate this license")
             self._act_btn_ref.setEnabled(True)
             try:
-                self._act_btn_ref.setIcon(_ico("fa5s.check-circle", "#22c55e"))
-                self._act_btn_ref.setIconSize(QSize(12, 12))
+                self._act_btn_ref.setIcon(_ico("fa5s.check-circle", C_SUCCESS))
+                self._act_btn_ref.setIconSize(QSize(11, 11))
             except Exception:
                 pass
-            self._act_btn_ref.setStyleSheet(
-                f"QPushButton{{background:rgba(34,197,94,0.12);"
-                f"color:#22c55e;border:1px solid rgba(34,197,94,0.28);"
-                f"border-radius:8px;font-size:10px;font-weight:600;"
-                f"text-align:left;padding-left:10px;}}"
-                f"QPushButton:hover{{background:rgba(34,197,94,0.22);}}")
+            self._act_btn_ref.setStyleSheet(self._ACT_ON_STYLE)
         # Unlock search buttons
         for btn in (getattr(self, '_btn_search_tags', None),
                     getattr(self, '_btn_search_cover', None)):
@@ -1169,28 +1070,19 @@ class NavSidebar(QWidget):
         _is_pro = False
         if self._beta_lbl:
             self._beta_lbl.setText(f"v{_APP_VERSION}")
-            self._beta_lbl.setStyleSheet(
-                f"background:{C_SURFACE2};color:{C_TEXT2};font-size:8px;font-weight:800;"
-                f"border-radius:4px;border:1px solid {C_BORDER};letter-spacing:0.8px;")
+            self._beta_lbl.setStyleSheet(self._VERSION_STYLE)
+        if getattr(self, '_upgrade_card', None):
+            self._upgrade_card.show()
         if hasattr(self, '_act_btn_ref'):
             self._act_btn_ref.setText("  Activate License")
+            self._act_btn_ref.setToolTip("")
             self._act_btn_ref.setEnabled(True)
             try:
-                self._act_btn_ref.setIcon(_ico("fa5s.key", C_ACCENT2))
-                self._act_btn_ref.setIconSize(QSize(12, 12))
+                self._act_btn_ref.setIcon(_ico("fa5s.key", C_TEXT3))
+                self._act_btn_ref.setIconSize(QSize(11, 11))
             except Exception:
                 pass
-            self._act_btn_ref.setStyleSheet(f"""
-                QPushButton{{
-                    background:{C_SURFACE2};color:{C_TEXT2};
-                    border:1px solid {C_BORDER};border-radius:8px;
-                    font-size:11px;font-weight:600;text-align:left;padding-left:10px;
-                }}
-                QPushButton:hover{{
-                    background:{C_BORDER};color:{C_TEXT};
-                    border-color:{C_ACCENT2};
-                }}
-            """)
+            self._act_btn_ref.setStyleSheet(self._ACT_STYLE)
 
     def update_counts(self, total: int):
         if self._nav_all:
@@ -1220,18 +1112,13 @@ class TagPanel(QWidget):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setStyleSheet(f"""
-            QScrollArea{{background:{C_SURFACE2};border:none;border-left:1px solid {C_BORDER};}}
-            QScrollBar:vertical{{background:{C_SURFACE2};width:4px;border:none;}}
-            QScrollBar::handle:vertical{{background:{C_BORDER};border-radius:2px;}}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
-        """)
-        content = QWidget(); content.setStyleSheet(f"background:{C_SURFACE2};")
-        c = QVBoxLayout(content); c.setContentsMargins(0,0,0,24); c.setSpacing(0)
+        scroll.setStyleSheet(f"QScrollArea{{background:{C_SURFACE};border:none;}}")
+        content = QWidget(); content.setStyleSheet(f"background:{C_SURFACE};")
+        c = QVBoxLayout(content); c.setContentsMargins(0,0,0,20); c.setSpacing(0)
 
         # ── Cover section ──────────────────────────────────────────────────
-        cov_sec = QWidget(); cov_sec.setStyleSheet(f"background:{C_SURFACE2};")
-        csv = QVBoxLayout(cov_sec); csv.setContentsMargins(16,16,16,14); csv.setSpacing(10)
+        cov_sec = QWidget(); cov_sec.setStyleSheet(f"background:{C_SURFACE};")
+        csv = QVBoxLayout(cov_sec); csv.setContentsMargins(20,20,20,8); csv.setSpacing(10)
 
         cover_wrap = QFrame()
         cover_wrap.setFixedSize(CoverLabel._SIZE, CoverLabel._SIZE)
@@ -1240,32 +1127,47 @@ class TagPanel(QWidget):
         self.cover.setGeometry(0,0,CoverLabel._SIZE,CoverLabel._SIZE)
         self.cover.clicked.connect(self._pick_cover)
         self.cover.cover_changed.connect(self._on_cover)
+        _overlay_ss = ("QPushButton{background:rgba(12,13,17,0.72);border:none;"
+                       "border-radius:8px;padding:0;}"
+                       "QPushButton:hover{background:rgba(12,13,17,0.92);}"
+                       "QPushButton:disabled{background:transparent;}")
         edit_btn = QPushButton(cover_wrap)
-        edit_btn.setFixedSize(30,30); edit_btn.move(CoverLabel._SIZE-36, 6); edit_btn.raise_()
+        edit_btn.setFixedSize(30,30); edit_btn.move(CoverLabel._SIZE-38, 8); edit_btn.raise_()
+        edit_btn.setToolTip("Choose artwork…")
         try:
             edit_btn.setIcon(_ico("fa5s.pen", "#ffffff"))
-            edit_btn.setIconSize(QSize(12, 12))
+            edit_btn.setIconSize(QSize(11, 11))
         except Exception:
             edit_btn.setText("Edit")
-        edit_btn.setStyleSheet(
-            "QPushButton{background:rgba(0,0,0,0.70);color:#fff;border:none;"
-            "border-radius:8px;font-size:11px;}"
-            "QPushButton:hover{background:rgba(0,0,0,0.90);}")
+        edit_btn.setStyleSheet(_overlay_ss)
         edit_btn.clicked.connect(self._pick_cover)
+
+        self.del_btn = QPushButton(cover_wrap)
+        self.del_btn.setFixedSize(30,30); self.del_btn.move(CoverLabel._SIZE-72, 8)
+        self.del_btn.raise_()
+        self.del_btn.setToolTip("Remove artwork")
+        try:
+            self.del_btn.setIcon(_ico("fa5s.trash-alt", "#ffffff"))
+            self.del_btn.setIconSize(QSize(11, 11))
+        except Exception:
+            self.del_btn.setText("×")
+        self.del_btn.setStyleSheet(_overlay_ss)
+        self.del_btn.clicked.connect(self._del_cover)
         csv.addWidget(cover_wrap, alignment=Qt.AlignmentFlag.AlignHCenter)
+        csv.addSpacing(4)
 
-        # Action buttons — two equal columns then full-width rows
-        btn_ss_active = (f"QPushButton{{background:{C_SURFACE};color:{C_TEXT};"
-                         f"border:1px solid {C_BORDER};border-radius:9px;"
-                         f"font-size:11px;font-weight:600;}}"
-                         f"QPushButton:hover{{background:{C_BORDER};border-color:{C_PRIMARY};}}"
-                         f"QPushButton:disabled{{color:{C_TEXT3};border-color:{C_SURFACE};}}")
-
-        row1 = QHBoxLayout(); row1.setSpacing(7)
-        bt = QPushButton("Search Tags"); bt.setFixedHeight(34)
-        bt.setStyleSheet(btn_ss_active); bt.clicked.connect(lambda: self._search("tags_only"))
-        bc = QPushButton("Cover Only");  bc.setFixedHeight(34)
-        bc.setStyleSheet(btn_ss_active); bc.clicked.connect(lambda: self._search("cover_only"))
+        # Search actions — two equal secondary buttons
+        row1 = QHBoxLayout(); row1.setSpacing(8)
+        bt = QPushButton("  Search Tags"); bt.setFixedHeight(34)
+        bc = QPushButton("  Find Cover");  bc.setFixedHeight(34)
+        for b_, icn in ((bt, "fa5s.search"), (bc, "fa5s.image")):
+            try:
+                b_.setIcon(_ico(icn, C_TEXT2)); b_.setIconSize(QSize(11, 11))
+            except Exception:
+                pass
+            b_.setStyleSheet(_BTN_SECONDARY)
+        bt.clicked.connect(lambda: self._search("tags_only"))
+        bc.clicked.connect(lambda: self._search("cover_only"))
         row1.addWidget(bt,1); row1.addWidget(bc,1)
         csv.addLayout(row1)
         self._btn_search_tags = bt
@@ -1273,28 +1175,13 @@ class TagPanel(QWidget):
         if not _is_pro:
             bt.setToolTip("✦ Pro feature — upgrade to use")
             bc.setToolTip("✦ Pro feature — upgrade to use")
-
-        bp = QPushButton("Paste  (⌘V)"); bp.setFixedHeight(34)
-        bp.setStyleSheet(btn_ss_active); bp.clicked.connect(self._paste)
-        csv.addWidget(bp)
-
-        self.del_btn = QPushButton("Remove Cover"); self.del_btn.setFixedHeight(34)
-        self.del_btn.setStyleSheet(f"""
-            QPushButton{{background:rgba(255,45,117,0.10);color:{C_ACCENT};
-                border:1px solid rgba(255,45,117,0.25);border-radius:9px;
-                font-size:11px;font-weight:600;}}
-            QPushButton:hover{{background:rgba(255,45,117,0.20);border-color:{C_ACCENT};}}
-            QPushButton:disabled{{color:{C_TEXT3};border-color:{C_SURFACE};background:transparent;}}
-        """)
-        self.del_btn.clicked.connect(self._del_cover)
-        csv.addWidget(self.del_btn)
         c.addWidget(cov_sec)
 
         # ── TRACK INFO section ─────────────────────────────────────────────
-        c.addWidget(self._sec_hdr("TRACK INFO", C_PRIMARY))
+        c.addWidget(self._sec_hdr("Track Info"))
 
-        fi = QWidget(); fi.setStyleSheet(f"background:{C_SURFACE2};")
-        fv = QVBoxLayout(fi); fv.setContentsMargins(16,12,16,14); fv.setSpacing(7)
+        fi = QWidget(); fi.setStyleSheet(f"background:{C_SURFACE};")
+        fv = QVBoxLayout(fi); fv.setContentsMargins(20,4,20,8); fv.setSpacing(8)
 
         for field, lbl in [("title","Title"), ("artist","Artist"),
                             ("album","Album"), ("genre","Genre"), ("label","Label")]:
@@ -1305,8 +1192,8 @@ class TagPanel(QWidget):
         jb = QHBoxLayout(); jb.setSpacing(10)
         yw = self._mk_line("year")
         bw = self._mk_line("bpm")
-        jb.addLayout(self._frow("Year", yw, lbl_w=46))
-        jb.addLayout(self._frow("BPM",  bw, lbl_w=40))
+        jb.addLayout(self._frow("Year", yw))
+        jb.addLayout(self._frow("BPM",  bw, lbl_w=30))
         fv.addLayout(jb)
 
         fv.addLayout(self._frow("Key",      self._mk_line("key")))
@@ -1314,10 +1201,10 @@ class TagPanel(QWidget):
         c.addWidget(fi)
 
         # ── ERWEITERT section ──────────────────────────────────────────────
-        c.addWidget(self._sec_hdr("ADVANCED", C_ACCENT2))
+        c.addWidget(self._sec_hdr("Advanced"))
 
-        ei = QWidget(); ei.setStyleSheet(f"background:{C_SURFACE2};")
-        ev = QVBoxLayout(ei); ev.setContentsMargins(16,12,16,14); ev.setSpacing(7)
+        ei = QWidget(); ei.setStyleSheet(f"background:{C_SURFACE};")
+        ev = QVBoxLayout(ei); ev.setContentsMargins(20,4,20,8); ev.setSpacing(8)
         ev.addLayout(self._frow("Album Artist", self._mk_line("album_artist")))
         ev.addLayout(self._frow("Composer",     self._mk_line("composer")))
 
@@ -1333,78 +1220,65 @@ class TagPanel(QWidget):
         return scroll
 
     # ── Section header helper ──────────────────────────────────────────────────
-    def _sec_hdr(self, text: str, color: str) -> QFrame:
-        f = QFrame(); f.setFixedHeight(38)
-        f.setStyleSheet(f"QFrame{{background:{C_SURFACE};border-top:1px solid {C_BORDER};"
-                        f"border-bottom:1px solid {C_BORDER};}}")
-        hl = QHBoxLayout(f); hl.setContentsMargins(16,0,16,0)
-        lbl = QLabel(text)
-        lbl.setStyleSheet(f"color:{color};font-size:9px;font-weight:800;"
-                          f"letter-spacing:1.6px;background:transparent;border:none;")
-        hl.addWidget(lbl); hl.addStretch()
+    def _sec_hdr(self, text: str) -> QWidget:
+        f = QWidget(); f.setFixedHeight(44)
+        f.setStyleSheet(f"background:{C_SURFACE};")
+        hl = QHBoxLayout(f); hl.setContentsMargins(20,14,20,4); hl.setSpacing(10)
+        lbl = QLabel(text.upper())
+        lbl.setStyleSheet(f"color:{C_TEXT3};font-size:10px;font-weight:600;"
+                          f"letter-spacing:1.2px;background:transparent;border:none;")
+        line = QFrame(); line.setFixedHeight(1)
+        line.setStyleSheet(f"background:{C_BORDER};border:none;")
+        hl.addWidget(lbl); hl.addWidget(line, 1, Qt.AlignmentFlag.AlignVCenter)
         return f
 
     # ── Form row helper — label + widget, all fields same right edge ───────────
-    def _frow(self, label: str, widget, lbl_w: int = 96) -> QHBoxLayout:
+    def _frow(self, label: str, widget, lbl_w: int = 82) -> QHBoxLayout:
         row = QHBoxLayout(); row.setSpacing(10); row.setContentsMargins(0,0,0,0)
         lbl = QLabel(label)
         lbl.setFixedWidth(lbl_w)
-        lbl.setStyleSheet(f"color:{C_TEXT2};font-size:11px;font-weight:500;"
+        lbl.setStyleSheet(f"color:{C_TEXT2};font-size:12px;"
                           f"background:transparent;border:none;")
         row.addWidget(lbl)
         row.addWidget(widget)
         return row
 
     def _build_bottom_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setStyleSheet(f"background:{C_SURFACE};border-top:1px solid {C_BORDER};")
-        bl = QVBoxLayout(bar); bl.setContentsMargins(16,10,16,14); bl.setSpacing(8)
+        bar = QWidget(); bar.setObjectName("tagBottomBar")
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bar.setStyleSheet(f"QWidget#tagBottomBar{{background:{C_SURFACE};"
+                          f"border-top:1px solid {C_BORDER};}}")
+        bl = QHBoxLayout(bar); bl.setContentsMargins(20,12,20,14); bl.setSpacing(8)
 
-        # Rename button — subtle, arrow-style
-        self.rename_btn = QPushButton("  Rename Files")
+        self.save_btn = QPushButton("Save Changes")
+        self.save_btn.setFixedHeight(38); self.save_btn.setShortcut("Ctrl+S")
+        self.save_btn.setToolTip("Save (⌘S)")
+        self.save_btn.setStyleSheet(_BTN_PRIMARY)
+        self.save_btn.clicked.connect(self.save_requested.emit)
+        bl.addWidget(self.save_btn, 1)
+
+        self.rename_btn = QPushButton()
+        self.rename_btn.setFixedSize(38,38)
+        self.rename_btn.setToolTip("Rename files from tags")
         try:
             self.rename_btn.setIcon(_ico("fa5s.i-cursor", C_TEXT2))
-            self.rename_btn.setIconSize(QSize(11, 11))
+            self.rename_btn.setIconSize(QSize(12, 12))
         except Exception:
-            pass
-        self.rename_btn.setFixedHeight(34)
-        self.rename_btn.setStyleSheet(f"""
-            QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};
-                         border:1px solid {C_BORDER};border-radius:9px;
-                         font-size:11px;font-weight:500;text-align:left;padding-left:12px;}}
-            QPushButton:hover{{background:{C_BORDER};color:{C_TEXT};border-color:{C_PRIMARY};}}
-            QPushButton:disabled{{color:{C_TEXT3};border-color:{C_BG};background:{C_SURFACE};}}
-        """)
+            self.rename_btn.setText("Aa")
+        self.rename_btn.setStyleSheet(_BTN_SECONDARY + "QPushButton{padding:0;}")
         self.rename_btn.clicked.connect(self._rename)
         bl.addWidget(self.rename_btn)
 
-        # Save + More row
-        save_row = QHBoxLayout(); save_row.setSpacing(8)
-        self.save_btn = QPushButton("  Save Changes")
-        self.save_btn.setFixedHeight(42); self.save_btn.setShortcut("Ctrl+S")
-        self.save_btn.setStyleSheet(f"""
-            QPushButton{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 {C_ACCENT}, stop:1 {C_ACCENT2});
-                color:#fff;border:none;border-radius:10px;
-                font-weight:700;font-size:13px;
-            }}
-            QPushButton:hover{{
-                background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #e01060, stop:1 #e07800);
-            }}
-            QPushButton:disabled{{background:{C_SURFACE2};color:{C_TEXT3};}}
-        """)
-        self.save_btn.clicked.connect(self.save_requested.emit)
-        save_row.addWidget(self.save_btn,1)
-
-        more = QPushButton("···"); more.setFixedSize(42,42)
-        more.setStyleSheet(f"QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};"
-                            f"border:none;border-radius:10px;font-size:18px;letter-spacing:1px;}}"
-                            f"QPushButton:hover{{background:{C_BORDER};color:{C_TEXT};}}")
+        more = QPushButton(); more.setFixedSize(38,38)
+        more.setToolTip("More")
+        try:
+            more.setIcon(_ico("fa5s.ellipsis-h", C_TEXT2)); more.setIconSize(QSize(13, 13))
+        except Exception:
+            more.setText("···")
+        more.setStyleSheet(_BTN_SECONDARY + "QPushButton{padding:0;}")
         more.clicked.connect(self._more_menu)
-        save_row.addWidget(more)
-        bl.addLayout(save_row)
+        self._more_btn = more
+        bl.addWidget(more)
         return bar
 
     # ── Field helpers ─────────────────────────────────────────────────────────
@@ -1473,11 +1347,7 @@ class TagPanel(QWidget):
         if data:
             pix = QPixmap(); pix.loadFromData(data)
             if not pix.isNull():
-                inner = CoverLabel._SIZE - 4
-                self.cover.setPixmap(pix.scaled(inner,inner,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation))
-                self.cover.setStyleSheet(CoverLabel._FILLED); self.cover._has = True; return
+                self.cover.show_pixmap(pix); return
         self.cover.clear_cover()
 
     def _edited(self, field, value):
@@ -1522,8 +1392,15 @@ class TagPanel(QWidget):
             return
         if not self._files: return
         f=self._files[0]
-        dlg=MetaSearchDialog(artist=f.artist,title=f.title,album=f.album,
-                              preset=preset,parent=self)
+        artist, title = f.artist.strip(), f.title.strip()
+        if not title:   # untagged file: search by its name
+            title = Path(f.filename).stem.replace("_", " ")
+        current = {k: str(getattr(f, k, "") or "") for k in
+                   ("artist","title","album","genre","label","year","bpm","key")}
+        current["key"] = normalize_key(current["key"])
+        dlg=MetaSearchDialog(artist=artist, title=title, album=f.album, preset=preset,
+                             current=current, duration=float(getattr(f, "duration", 0) or 0),
+                             has_cover=bool(f.cover_data), parent=self)
         dlg.result_selected.connect(self._apply); dlg.exec()
 
     def _show_pro_prompt(self):
@@ -1545,7 +1422,7 @@ class TagPanel(QWidget):
         if "cover_data" in payload:
             self.cover.set_cover_data(payload["cover_data"],
                                        payload.get("cover_mime","image/jpeg"))
-        for key in ("artist","title","genre","label","year","bpm","key"):
+        for key in ("artist","title","album","genre","label","year","bpm","key"):
             if key in payload:
                 val = payload[key]
                 if key == "key": val = normalize_key(val)
@@ -1556,16 +1433,14 @@ class TagPanel(QWidget):
 
     def _more_menu(self):
         menu=QMenu(self)
-        menu.setStyleSheet(f"QMenu{{background:{C_SURFACE2};color:{C_TEXT};"
-                            f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
-                            f"QMenu::item{{padding:7px 16px;border-radius:6px;font-size:12px;}}"
-                            f"QMenu::item:selected{{background:{C_PRIMARY};}}"
-                            f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
-        menu.addAction("  Cover from File…").triggered.connect(self._pick_cover)
-        menu.addAction("  Paste Cover  ⌘V").triggered.connect(self._paste)
+        menu.addAction("Rename Files from Tags").triggered.connect(self._rename)
         menu.addSeparator()
-        menu.addAction("  Remove Cover").triggered.connect(self._del_cover)
-        menu.exec(self.save_btn.mapToGlobal(self.save_btn.rect().topRight()))
+        menu.addAction("Cover from File…").triggered.connect(self._pick_cover)
+        menu.addAction("Paste Cover  ⌘V").triggered.connect(self._paste)
+        menu.addAction("Remove Cover").triggered.connect(self._del_cover)
+        m = menu.sizeHint()
+        menu.exec(self._more_btn.mapToGlobal(
+            self._more_btn.rect().topRight() - QPoint(m.width(), m.height() + 6)))
 
     def _rename(self):
         if not self._files: return
@@ -1679,7 +1554,7 @@ class SettingsDialog(QDialog):
             }}
             QPushButton:hover{{
                 background:qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #8b46ff,stop:1 #ff4d88);
+                    stop:0 #9d74f8,stop:1 #f062ab);
             }}
         """)
         close.clicked.connect(self.accept)
@@ -1894,7 +1769,6 @@ class MainWindow(QMainWindow):
         # Nav sidebar
         self.nav = NavSidebar()
         self.nav.add_files_clicked.connect(self._open_files)
-        self.nav.files_dropped.connect(self._add_files)
         self.nav.nav_filter_changed.connect(self._nav_filter)
         self._nav_mode = "all"   # 'all' | 'genre'
         self._nav_value = ""
@@ -1905,44 +1779,39 @@ class MainWindow(QMainWindow):
         rl = QVBoxLayout(right); rl.setContentsMargins(0,0,0,0); rl.setSpacing(0)
 
         # Top search bar
-        topbar = QFrame(); topbar.setFixedHeight(64)
+        topbar = QFrame(); topbar.setFixedHeight(60)
         topbar.setStyleSheet(f"QFrame{{background:{C_BG};border-bottom:1px solid {C_BORDER};}}")
-        tbl = QHBoxLayout(topbar); tbl.setContentsMargins(20,0,20,0); tbl.setSpacing(12)
-
-        # Search icon (qtawesome)
-        srch_ic = QLabel()
-        srch_ic.setStyleSheet("background:transparent;border:none;")
-        try:
-            srch_ic.setPixmap(_ico("fa5s.search", C_TEXT3).pixmap(15,15))
-        except Exception:
-            srch_ic.setText("S")
-        tbl.addWidget(srch_ic)
+        tbl = QHBoxLayout(topbar); tbl.setContentsMargins(24,0,16,0); tbl.setSpacing(8)
 
         self.search_field = QLineEdit()
-        self.search_field.setPlaceholderText("Search")
-        self.search_field.setFixedHeight(36)
+        self.search_field.setPlaceholderText("Search title, artist, label…      ⌘K")
+        self.search_field.setFixedHeight(34)
+        self.search_field.setMaximumWidth(520)
+        self.search_field.setClearButtonEnabled(True)
+        try:
+            self.search_field.addAction(_ico("fa5s.search", C_TEXT3),
+                                        QLineEdit.ActionPosition.LeadingPosition)
+        except Exception:
+            pass
         self.search_field.setStyleSheet(f"""
-            QLineEdit{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid transparent;
-                       border-radius:18px;padding:0 16px;font-size:13px;}}
-            QLineEdit:focus{{border-color:{C_PRIMARY};}}
+            QLineEdit{{background:{C_SURFACE2};color:{C_TEXT};border:1px solid {C_BORDER};
+                       border-radius:9px;padding:0 8px;font-size:13px;}}
+            QLineEdit:hover{{border-color:{C_BORDER2};}}
+            QLineEdit:focus{{border-color:{C_PRIMARY};background:{C_BG};}}
         """)
         self.search_field.textChanged.connect(self._filter)
         tbl.addWidget(self.search_field, 1)
+        tbl.addStretch()
 
         _sc_focus = QShortcut(QKeySequence("Ctrl+K"), self)
         _sc_focus.activated.connect(
             lambda: (self.search_field.setFocus(), self.search_field.selectAll()))
 
-        sc = QLabel("⌘K")
-        sc.setStyleSheet(f"background:{C_SURFACE2};color:{C_TEXT2};"
-                         f"font-size:10px;font-weight:600;padding:3px 8px;"
-                         f"border-radius:6px;border:none;")
-        tbl.addWidget(sc); tbl.addSpacing(4)
-
         # Settings button (opens SettingsDialog)
-        settings_btn = QPushButton(); settings_btn.setFixedSize(32,32)
+        settings_btn = QPushButton(); settings_btn.setFixedSize(34,34)
+        settings_btn.setToolTip("Settings")
         settings_btn.setStyleSheet(
-            f"QPushButton{{background:transparent;border:none;border-radius:8px;}}"
+            f"QPushButton{{background:transparent;border:none;border-radius:8px;padding:0;}}"
             f"QPushButton:hover{{background:{C_SURFACE2};}}")
         try:
             settings_btn.setIcon(_ico("fa5s.sliders-h", C_TEXT2))
@@ -1963,44 +1832,42 @@ class MainWindow(QMainWindow):
         cl = QVBoxLayout(center); cl.setContentsMargins(0,0,0,0); cl.setSpacing(0)
 
         # List header
-        lh = QWidget(); lh.setFixedHeight(52); lh.setStyleSheet(f"background:{C_BG};")
-        lhl = QHBoxLayout(lh); lhl.setContentsMargins(20,0,20,0)
+        lh = QWidget(); lh.setFixedHeight(68); lh.setStyleSheet(f"background:{C_BG};")
+        lhl = QHBoxLayout(lh); lhl.setContentsMargins(24,4,20,0); lhl.setSpacing(10)
         self._list_title = QLabel("All Tracks")
-        self._list_title.setStyleSheet(f"color:{C_TEXT};font-size:18px;font-weight:700;background:transparent;")
-        self.count_lbl = QLabel("  0 files")
-        self.count_lbl.setStyleSheet(f"color:{C_TEXT2};font-size:13px;background:transparent;")
+        self._list_title.setStyleSheet(
+            f"color:{C_TEXT};font-size:20px;font-weight:700;background:transparent;")
+        self.count_lbl = QLabel("0 files")
+        self.count_lbl.setStyleSheet(
+            f"color:{C_TEXT3};font-size:13px;background:transparent;padding-top:3px;")
         lhl.addWidget(self._list_title); lhl.addWidget(self.count_lbl); lhl.addStretch()
         cl.addWidget(lh)
+        fbl = lhl   # filter pills sit on the right of the header row
+        fbl.setSpacing(6)
 
-        # Filter pills
-        fb = QFrame(); fb.setFixedHeight(44)
-        fb.setStyleSheet(f"QFrame{{background:{C_BG};border-bottom:1px solid {C_SURFACE};}}")
-        fbl = QHBoxLayout(fb); fbl.setContentsMargins(16,0,16,0); fbl.setSpacing(6)
-
-        _pill_style = (f"QPushButton{{background:{C_SURFACE2};color:{C_TEXT2};"
+        _pill_style = (f"QPushButton{{background:transparent;color:{C_TEXT2};"
                        f"border:1px solid {C_BORDER};border-radius:14px;"
-                       f"font-size:11px;padding:0 12px;}}"
-                       f"QPushButton:hover{{border-color:{C_PRIMARY};color:{C_TEXT};}}"
-                       f"QPushButton:checked{{background:{C_PRIMARY};color:#fff;border-color:{C_PRIMARY};}}")
+                       f"font-size:12px;font-weight:500;padding:0 12px;}}"
+                       f"QPushButton:hover{{background:{C_SURFACE2};color:{C_TEXT};}}"
+                       f"QPushButton:checked{{background:{C_PRIMARY_SOFT};color:#c4b5fd;"
+                       f"border-color:rgba(139,92,246,0.45);}}")
 
         self._all_btn = QPushButton("All"); self._all_btn.setFixedHeight(28)
         self._all_btn.setCheckable(True); self._all_btn.setChecked(True)
         self._all_btn.setStyleSheet(_pill_style)
         self._all_btn.clicked.connect(self._reset_filters)
 
-        self._genre_btn = QPushButton("Genre  ˅"); self._genre_btn.setFixedHeight(28)
+        self._genre_btn = QPushButton("Genre  ▾"); self._genre_btn.setFixedHeight(28)
         self._genre_btn.setStyleSheet(_pill_style)
         self._genre_btn.clicked.connect(self._pick_genre_filter)
 
-        self._bpm_btn = QPushButton("BPM  ˅"); self._bpm_btn.setFixedHeight(28)
+        self._bpm_btn = QPushButton("BPM  ▾"); self._bpm_btn.setFixedHeight(28)
         self._bpm_btn.setStyleSheet(_pill_style)
         self._bpm_btn.clicked.connect(self._pick_bpm_filter)
 
         fbl.addWidget(self._all_btn)
         fbl.addWidget(self._genre_btn)
         fbl.addWidget(self._bpm_btn)
-        fbl.addStretch()
-        cl.addWidget(fb)
 
         # Table
         self.table = FileTable()
@@ -2013,8 +1880,9 @@ class MainWindow(QMainWindow):
         self.table.setShowGrid(False)
         self.table.setSortingEnabled(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(50)
-        self.table.setIconSize(QSize(38,38))
+        self.table.verticalHeader().setDefaultSectionSize(TrackDelegate.ROW_H)
+        self.table.setIconSize(QSize(TrackDelegate.ART, TrackDelegate.ART))
+        self.table.setFrameShape(QFrame.Shape.NoFrame)
         self.table.setWordWrap(False)
         self.table.viewport().setMouseTracking(True)
         self.table.setMouseTracking(True)
@@ -2025,11 +1893,16 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(_NUM_COL, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(_COVER_COL, QHeaderView.ResizeMode.Fixed)
         hh.setSortIndicatorShown(True)
-        self.table.setColumnWidth(_NUM_COL, 40)
-        self.table.setColumnWidth(_COVER_COL, 54)
+        hh.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+        hh.setHighlightSections(False)
+        hh.setFixedHeight(34)
+        # DJ-first visual order: BPM + Key right after Artist (logical indices unchanged)
+        for to_pos, logical in ((4, _BPM_COL), (5, _KEY_COL)):
+            hh.moveSection(hh.visualIndex(logical), to_pos)
+        self._apply_default_col_widths()
         # Restore user-adjusted column widths from the last session
         try:
-            saved = _SETTINGS().value("column_widths")
+            saved = _SETTINGS().value("column_widths_v2")
             if isinstance(saved, list) and len(saved) == len(COLUMNS):
                 for i, wdt in enumerate(saved):
                     if i not in (_NUM_COL, _COVER_COL):
@@ -2041,17 +1914,11 @@ class MainWindow(QMainWindow):
             QTableWidget{{background:{C_BG};gridline-color:transparent;border:none;
                           selection-background-color:transparent;outline:none;font-size:12px;}}
             QTableWidget::item{{border:none;padding:0;}}
-            QHeaderView{{background:{C_SURFACE};}}
-            QHeaderView::section{{background:{C_SURFACE};color:{C_TEXT2};border:none;
-                border-right:1px solid {C_BORDER};border-bottom:2px solid {C_BORDER};
-                padding:0 8px;font-weight:700;font-size:10px;letter-spacing:0.8px;height:32px;}}
-            QScrollBar:vertical{{background:{C_SURFACE};width:8px;border:none;margin:0;}}
-            QScrollBar::handle:vertical{{background:{C_BORDER};border-radius:4px;min-height:30px;}}
-            QScrollBar::handle:vertical:hover{{background:{C_PRIMARY};}}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{{height:0;}}
-            QScrollBar:horizontal{{background:{C_SURFACE};height:8px;border:none;margin:0;}}
-            QScrollBar::handle:horizontal{{background:{C_BORDER};border-radius:4px;}}
-            QScrollBar::add-line:horizontal,QScrollBar::sub-line:horizontal{{width:0;}}
+            QHeaderView{{background:{C_BG};border:none;}}
+            QHeaderView::section{{background:{C_BG};color:{C_TEXT3};border:none;
+                border-bottom:1px solid {C_BORDER};
+                padding:0 10px;font-weight:600;font-size:10px;letter-spacing:0.9px;}}
+            QHeaderView::section:hover{{color:{C_TEXT2};}}
         """)
         self._delegate = TrackDelegate(self.table)
         self.table.setItemDelegate(self._delegate)
@@ -2064,11 +1931,11 @@ class MainWindow(QMainWindow):
 
         # Tag panel
         self.tag_panel = TagPanel()
-        self.tag_panel.setMinimumWidth(290)
+        self.tag_panel.setMinimumWidth(328)
         self.tag_panel.tags_changed.connect(self._refresh_sel)
         self.tag_panel.save_requested.connect(self._save_sel)
         splitter.addWidget(self.tag_panel)
-        splitter.setSizes([1080,320]); splitter.setStretchFactor(0,1)
+        splitter.setSizes([1080,328]); splitter.setStretchFactor(0,1)
 
         rl.addWidget(splitter,1)
         ml.addWidget(right,1)
@@ -2166,10 +2033,17 @@ class MainWindow(QMainWindow):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    def _apply_default_col_widths(self):
+        for i, (field, _) in enumerate(COLUMNS):
+            if field in _DEFAULT_COL_W:
+                self.table.setColumnWidth(i, _DEFAULT_COL_W[field])
+        self.table.setColumnWidth(_NUM_COL, 44)
+        self.table.setColumnWidth(_COVER_COL, 56)
+
     def _fit_cols(self):
         self.table.resizeColumnsToContents()
-        self.table.setColumnWidth(_NUM_COL, 40)
-        self.table.setColumnWidth(_COVER_COL, 54)
+        self.table.setColumnWidth(_NUM_COL, 44)
+        self.table.setColumnWidth(_COVER_COL, 56)
 
     def _filter(self, text: str):
         self._apply_filters(search=text)
@@ -2178,8 +2052,8 @@ class MainWindow(QMainWindow):
         self._active_genre_filter = None
         self._active_bpm_min = None
         self._active_bpm_max = None
-        self._genre_btn.setText("Genre  ˅")
-        self._bpm_btn.setText("BPM  ˅")
+        self._genre_btn.setText("Genre  ▾")
+        self._bpm_btn.setText("BPM  ▾")
         self._all_btn.setChecked(True)
         self._apply_filters()
 
@@ -2189,7 +2063,7 @@ class MainWindow(QMainWindow):
 
     def _genre_filter(self, genre: Optional[str], btn: QPushButton = None):
         self._active_genre_filter = genre
-        self._genre_btn.setText("Genre  ˅" if not genre else f"Genre: {genre}")
+        self._genre_btn.setText("Genre  ▾" if not genre else f"Genre: {genre}")
         self._sync_all_pill()
         self._apply_filters()
 
@@ -2201,11 +2075,6 @@ class MainWindow(QMainWindow):
         if not genres_in_lib:
             return
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu{{background:{C_SURFACE2};color:{C_TEXT};"
-            f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
-            f"QMenu::item{{padding:6px 16px;border-radius:6px;font-size:12px;}}"
-            f"QMenu::item:selected{{background:{C_PRIMARY};}}")
         clear = menu.addAction("All Genres")
         clear.triggered.connect(lambda: self._genre_filter(None, self._genre_btn))
         menu.addSeparator()
@@ -2216,11 +2085,6 @@ class MainWindow(QMainWindow):
 
     def _pick_bpm_filter(self):
         menu = QMenu(self)
-        menu.setStyleSheet(
-            f"QMenu{{background:{C_SURFACE2};color:{C_TEXT};"
-            f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
-            f"QMenu::item{{padding:6px 16px;border-radius:6px;font-size:12px;}}"
-            f"QMenu::item:selected{{background:{C_PRIMARY};}}")
         menu.addAction("All BPM").triggered.connect(lambda: self._set_bpm_filter(None, None))
         menu.addSeparator()
         for label, lo, hi in [("< 100 BPM",0,100),("100–125 BPM",100,125),
@@ -2233,7 +2097,7 @@ class MainWindow(QMainWindow):
     def _set_bpm_filter(self, lo, hi):
         self._active_bpm_min = lo; self._active_bpm_max = hi
         if lo is None:
-            self._bpm_btn.setText("BPM  ˅")
+            self._bpm_btn.setText("BPM  ▾")
         elif hi >= 999:
             self._bpm_btn.setText(f"BPM: > {lo}")
         elif lo == 0:
@@ -2297,9 +2161,9 @@ class MainWindow(QMainWindow):
                       if not self.table.isRowHidden(r))
         total = len(self.audio_files)
         if visible == total:
-            self.count_lbl.setText(f"  {total} {'file' if total==1 else 'files'}")
+            self.count_lbl.setText(f"{total} {'file' if total==1 else 'files'}")
         else:
-            self.count_lbl.setText(f"  {visible} of {total} files")
+            self.count_lbl.setText(f"{visible} of {total} files")
 
     def _nav_filter(self, mode: str, value: str = ""):
         self._nav_mode = mode
@@ -2309,7 +2173,7 @@ class MainWindow(QMainWindow):
 
     def _update_status(self):
         n = len(self.audio_files)
-        self.count_lbl.setText(f"  {n} {'file' if n==1 else 'files'}")
+        self.count_lbl.setText(f"{n} {'file' if n==1 else 'files'}")
         self.nav.update_counts(n)
         self.nav.update_genre_counts(self.audio_files)
         if n == 0:
@@ -2339,7 +2203,7 @@ class MainWindow(QMainWindow):
             if thread is not None and thread.isRunning():
                 thread.wait()
         try:
-            _SETTINGS().setValue("column_widths",
+            _SETTINGS().setValue("column_widths_v2",
                 [self.table.columnWidth(i) for i in range(len(COLUMNS))])
         except Exception:
             pass
@@ -2383,9 +2247,7 @@ class MainWindow(QMainWindow):
         self.table.setRowCount(len(self.audio_files))
         for row,af in enumerate(self.audio_files): self._fill_row(row,af)
         self.table.setSortingEnabled(True)
-        if not getattr(self, '_cols_restored', False):
-            self.table.resizeColumnsToContents()
-        self.table.setColumnWidth(_NUM_COL,40); self.table.setColumnWidth(_COVER_COL,54)
+        self.table.setColumnWidth(_NUM_COL,44); self.table.setColumnWidth(_COVER_COL,56)
         # Apply default sort from settings
         _ds = _SETTINGS().value("default_sort", "None", str)
         _ds_map = {"Title":_TITLE_COL, "Artist":3, "Genre":_GENRE_COL,
@@ -2408,9 +2270,8 @@ class MainWindow(QMainWindow):
                 if af.cover_data:
                     pix=QPixmap(); pix.loadFromData(af.cover_data)
                     if not pix.isNull():
-                        item.setIcon(QIcon(pix.scaled(38,38,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation)))
+                        item.setData(Qt.ItemDataRole.DecorationRole,
+                            _rounded_pixmap(pix, TrackDelegate.ART, 6))
             elif field=="title":
                 tv=str(getattr(af,"title",""))
                 item=SortItem(tv)
@@ -2506,11 +2367,6 @@ class MainWindow(QMainWindow):
 
     def _context_menu(self, pos):
         sel=self._sel_files(); menu=QMenu(self)
-        menu.setStyleSheet(f"QMenu{{background:{C_SURFACE2};color:{C_TEXT};"
-                            f"border:1px solid {C_BORDER};border-radius:10px;padding:4px;}}"
-                            f"QMenu::item{{padding:7px 16px;border-radius:6px;font-size:12px;}}"
-                            f"QMenu::item:selected{{background:{C_PRIMARY};}}"
-                            f"QMenu::separator{{background:{C_BORDER};height:1px;margin:3px 8px;}}")
         menu.addAction(f"  Quick Look  Space").triggered.connect(
             lambda: _quick_look(sel[0].path) if sel else None)
         menu.addAction(f"  Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
