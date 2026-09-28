@@ -56,6 +56,8 @@ a = Analysis(
         "app.updater",
         "app.theme",
         "app.batch_tag",
+        "app.player",
+        "PyQt6.QtMultimedia",
     ] + qta_hiddenimports + qt_hidden + mutagen_hidden,
     hookspath=[],
     hooksconfig={},

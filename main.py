@@ -151,7 +151,21 @@ QCheckBox { color: #ededf1; spacing: 8px; }
 """
 
 
+def _log_unhandled(exc_type, exc, tb):
+    """PyQt aborts the whole app on an unhandled exception in a slot —
+    log it instead so one bug in a button can't close TrackTag."""
+    import traceback
+    traceback.print_exception(exc_type, exc, tb)
+    try:
+        log = os.path.join(os.path.expanduser("~/Library/Logs"), "TrackTag.log")
+        with open(log, "a", encoding="utf-8") as f:
+            traceback.print_exception(exc_type, exc, tb, file=f)
+    except Exception:
+        pass
+
+
 def main():
+    sys.excepthook = _log_unhandled
     app = QApplication(sys.argv)
     app.setApplicationName("TrackTag")
     app.setApplicationDisplayName("TrackTag")

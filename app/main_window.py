@@ -30,6 +30,7 @@ _SETTINGS = lambda: QSettings("TrackTag", "TrackTag")
 from .audio_handler import AudioFile, SUPPORTED_EXTENSIONS
 from .cover_search import MetaSearchDialog
 from .batch_tag import BatchTagDialog
+from .player import PlayerBar
 from .updater import UpdateChecker
 from . import license as _lic
 
@@ -365,6 +366,7 @@ class TrackDelegate(QStyledItemDelegate):
     def __init__(self, table, parent=None):
         super().__init__(parent)
         self._table = table
+        self.playing_path: Optional[str] = None
 
     def paint(self, painter, option, index):
         from PyQt6.QtWidgets import QStyle
@@ -387,9 +389,18 @@ class TrackDelegate(QStyledItemDelegate):
         base = QFont(option.font); base.setPixelSize(12)
 
         if col == _NUM_COL:
-            painter.setFont(base)
-            painter.setPen(self._SEL_LINE if sel else self._TEXT3)
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+            af = index.data(Qt.ItemDataRole.UserRole)
+            if self.playing_path and af is not None and getattr(af, "path", None) == self.playing_path:
+                try:
+                    _ico("fa5s.volume-up", C_PRIMARY).paint(
+                        painter, QRect(rect.center().x()-7, rect.center().y()-7, 14, 14))
+                except Exception:
+                    painter.setPen(self._SEL_LINE)
+                    painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, "▶")
+            else:
+                painter.setFont(base)
+                painter.setPen(self._SEL_LINE if sel else self._TEXT3)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
 
         elif col == _COVER_COL:
             ax = rect.x() + (rect.width()-self.ART)//2
@@ -1632,8 +1643,8 @@ class SettingsDialog(QDialog):
         v.addWidget(self._section("PREVIEW"))
         v.addSpacing(2)
         info = QLabel(
-            'Select a track and press Space (or right-click → Quick Look)\n'
-            'to preview it with macOS Quick Look.')
+            'Space plays the selected track · ↑/↓ switches tracks while playing\n'
+            '←/→ skips 10 s · ⌘Y opens macOS Quick Look.')
         info.setStyleSheet(f"color:{C_TEXT2};font-size:12px;background:transparent;border:none;")
         info.setWordWrap(True)
         v.addWidget(info)
@@ -1721,7 +1732,10 @@ class SettingsDialog(QDialog):
             ("⌘⇧O",         "Open folder"),
             ("⌘S",          "Save selection"),
             ("⌘⇧S",         "Save all"),
-            ("Space",        "Quick Look preview"),
+            ("Space",        "Play / Pause"),
+            ("← / →",        "Skip 10 s  (⇧ 30 s)"),
+            ("↑ / ↓",        "Next / previous track"),
+            ("⌘Y",          "Quick Look preview"),
             ("⌘K",          "Focus search"),
             ("⌘A",          "Select all"),
             ("⌘F",          "Search tags"),
@@ -1748,6 +1762,7 @@ class SettingsDialog(QDialog):
 class FileTable(QTableWidget):
     files_dropped = pyqtSignal(list)
     space_pressed = pyqtSignal()
+    seek_requested = pyqtSignal(int)       # seconds, ±
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAcceptDrops(True)
@@ -1756,6 +1771,11 @@ class FileTable(QTableWidget):
         # The view would use Space for selection — TrackTag uses it for Quick Look
         if e.key() == Qt.Key.Key_Space and not e.modifiers():
             if not e.isAutoRepeat(): self.space_pressed.emit()
+            e.accept(); return
+        # ←/→ skip through the playing track (⇧ = bigger steps)
+        if e.key() in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            step = 30 if e.modifiers() & Qt.KeyboardModifier.ShiftModifier else 10
+            self.seek_requested.emit(step if e.key() == Qt.Key.Key_Right else -step)
             e.accept(); return
         super().keyPressEvent(e)
     def dragEnterEvent(self, e):
@@ -1985,8 +2005,17 @@ class MainWindow(QMainWindow):
         self.table.customContextMenuRequested.connect(self._context_menu)
         self.table.itemSelectionChanged.connect(self._on_sel)
         self.table.files_dropped.connect(self._add_files)
-        self.table.space_pressed.connect(self._quick_look_sel)
+        self.table.space_pressed.connect(self._toggle_play)
         cl.addWidget(self.table,1)
+        self.player_bar = PlayerBar()
+        self.player_bar.playing_changed.connect(self._on_playing_changed)
+        self.table.seek_requested.connect(self.player_bar.seek_by)
+        self.table.cellDoubleClicked.connect(
+            lambda r, _c: self.player_bar.load(
+                self.table.item(r, _NUM_COL).data(Qt.ItemDataRole.UserRole), autoplay=True))
+        cl.addWidget(self.player_bar)
+        _ql = QShortcut(QKeySequence("Ctrl+Y"), self)
+        _ql.activated.connect(self._quick_look_sel)
         splitter.addWidget(center)
 
         # Tag panel
@@ -2284,7 +2313,7 @@ class MainWindow(QMainWindow):
         dur = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
         self.statusBar().showMessage(
             f"  {n} file{'s' if n!=1 else ''}  ·  Total {dur}"
-            f"  ·  ⌘S save  ·  ⌘A select all  ·  Space Quick Look")
+            f"  ·  Space play  ·  ←/→ skip  ·  ⌘Y Quick Look  ·  ⌘S save")
 
     def closeEvent(self, e):
         unsaved=[f for f in self.audio_files if f._modified]
@@ -2412,6 +2441,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_sel(self):
         for af in self._sel_files(): self._refresh_row(af)
+        self.player_bar.refresh_meta()
 
     def _sel_files(self) -> List[AudioFile]:
         seen,result=set(),[]
@@ -2425,11 +2455,15 @@ class MainWindow(QMainWindow):
     def _on_sel(self):
         sel=self._sel_files()
         self.tag_panel.load_files(sel)
+        if len(sel) == 1 and hasattr(self, "player_bar"):
+            self.player_bar.load(sel[0], autoplay=self.player_bar.is_playing())
 
     # ── Save ──────────────────────────────────────────────────────────────────
 
     def _save_files(self, files):
+        state = self.player_bar.release(files)
         errors=[af.filename for af in files if not af.save()]
+        self.player_bar.resume(state)
         if errors:
             QMessageBox.warning(self,"Save Error",
                 "Could not save:\n\n"+"\n".join(errors))
@@ -2464,12 +2498,15 @@ class MainWindow(QMainWindow):
             it = self.table.item(r, _NUM_COL)
             if it:
                 it.setText(str(r+1)); it.setData(_SORT_ROLE, r+1)
+        if self.player_bar.path and not any(f.path == self.player_bar.path for f in self.audio_files):
+            self.player_bar.stop()
         self._sync_genres()
         self.tag_panel.load_files([]); self._update_status()
         self._apply_filters()
 
     def _clear_all(self):
         if not self._confirm_discard(self.audio_files): return
+        self.player_bar.stop()
         self.audio_files.clear()
         self._sync_genres()
         self.table.setRowCount(0); self.tag_panel.load_files([]); self._update_status()
@@ -2478,7 +2515,9 @@ class MainWindow(QMainWindow):
 
     def _context_menu(self, pos):
         sel=self._sel_files(); menu=QMenu(self)
-        menu.addAction("Quick Look  Space").triggered.connect(
+        menu.addAction("Play").triggered.connect(
+            lambda: self.player_bar.load(sel[0], autoplay=True) if sel else None)
+        menu.addAction("Quick Look  ⌘Y").triggered.connect(
             lambda: _quick_look(sel[0].path) if sel else None)
         menu.addAction(f"Save ({len(sel)} file(s))").triggered.connect(self._save_sel)
         menu.addSeparator()
@@ -2524,9 +2563,17 @@ class MainWindow(QMainWindow):
         sel = self._sel_files()
         if sel: _quick_look(sel[0].path)
 
+    def _toggle_play(self):
+        sel = self._sel_files()
+        self.player_bar.toggle(sel[0] if sel else None)
+
+    def _on_playing_changed(self, path):
+        self._delegate.playing_path = path
+        self.table.viewport().update()
+
     def keyPressEvent(self, e):
         if e.key() == Qt.Key.Key_Space and not e.isAutoRepeat():
-            self._quick_look_sel()
+            self._toggle_play()
             e.accept()
         elif e.matches(QKeySequence.StandardKey.Paste):
             self.tag_panel._paste()
