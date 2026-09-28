@@ -1054,14 +1054,12 @@ class NavSidebar(QWidget):
             self._genre_vbox.addWidget(nav)
 
     def _sync_genres_from_files(self, audio_files):
-        """Auto-add genres found in loaded files to the sidebar."""
+        """Keep sidebar genres in sync with the current file list."""
         seen = set()
         for af in audio_files:
             g = (getattr(af, 'genre', '') or '').strip()
             seen.add(g if g else 'No Genre')
-        for g in sorted(seen):
-            if g not in self._genres:
-                self._genres.append(g)
+        self._genres = sorted(seen)
         self._save_genres()
         self._rebuild_genre_navs()
         self.update_genre_counts(audio_files)
@@ -2331,6 +2329,15 @@ class MainWindow(QMainWindow):
                 f"{len(unsaved)} file(s) have unsaved changes.\nQuit anyway?",
                 QMessageBox.StandardButton.Discard|QMessageBox.StandardButton.Cancel)
             if r==QMessageBox.StandardButton.Cancel: e.ignore(); return
+        if getattr(self, "_update_checker", None) is not None:
+            self._update_checker.shutdown()
+        threads = (
+            getattr(self, "_lic_thread", None),
+            getattr(getattr(self, "_update_checker", None), "_thread", None),
+        )
+        for thread in threads:
+            if thread is not None and thread.isRunning():
+                thread.wait()
         try:
             _SETTINGS().setValue("column_widths",
                 [self.table.columnWidth(i) for i in range(len(COLUMNS))])
@@ -2355,6 +2362,11 @@ class MainWindow(QMainWindow):
                     paths.append(os.path.join(root,name))
         if paths: self._add_files(paths)
 
+    def _sync_genres(self):
+        self.nav._sync_genres_from_files(self.audio_files)
+        if self._nav_mode == "genre" and self._nav_value not in self.nav._genres:
+            self.nav._select("all", "")
+
     def _add_files(self, paths: List[str]):
         existing={f.path for f in self.audio_files}
         new=[p for p in paths if p not in existing]
@@ -2363,7 +2375,7 @@ class MainWindow(QMainWindow):
         for p in new:
             try: self.audio_files.append(AudioFile(p))
             except Exception as e: print(f"Error loading {p}: {e}")
-        self.nav._sync_genres_from_files(self.audio_files)
+        self._sync_genres()
         self._rebuild_table()
 
     def _rebuild_table(self):
@@ -2461,7 +2473,7 @@ class MainWindow(QMainWindow):
                 "Could not save:\n\n"+"\n".join(errors))
         else:
             self.statusBar().showMessage(f"✓  {len(files)} file(s) saved.")
-            self.nav._sync_genres_from_files(self.audio_files)
+            self._sync_genres()
 
     def _save_sel(self): self._save_files(self._sel_files() or self.audio_files)
     def _save_all(self): self._save_files(self.audio_files)
@@ -2481,12 +2493,13 @@ class MainWindow(QMainWindow):
             it = self.table.item(r, _NUM_COL)
             if it:
                 it.setText(str(r+1)); it.setData(_SORT_ROLE, r+1)
-        self.nav.update_genre_counts(self.audio_files)
+        self._sync_genres()
         self.tag_panel.load_files([]); self._update_status()
         self._apply_filters()
 
     def _clear_all(self):
         self.audio_files.clear()
+        self._sync_genres()
         self.table.setRowCount(0); self.tag_panel.load_files([]); self._update_status()
 
     # ── Context menu ──────────────────────────────────────────────────────────

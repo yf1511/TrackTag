@@ -435,6 +435,7 @@ class _ThumbLoader(QThread):
         super().__init__(); self._items = items
     def run(self):
         for uid, url, src in self._items:
+            if self.isInterruptionRequested(): return
             if not url: continue
             try:
                 h = {"User-Agent": _UA, "Accept": "image/*"}
@@ -665,6 +666,31 @@ class MetaSearchDialog(QDialog):
         self._pending  = 0
         self._smart: dict = {}
         self._setup_ui(artist, title, album)
+
+    def _wait_for_workers(self):
+        workers = [
+            getattr(self, f"_w{worker.__name__}", None)
+            for worker in (_iTunesWorker, _DiscogsWorker, _BeatportWorker, _SoundCloudWorker)
+        ]
+        workers.append(getattr(self, "_loader", None))
+        for worker in workers:
+            if worker is not None and worker.isRunning():
+                worker.requestInterruption()
+        for worker in workers:
+            if worker is not None and worker.isRunning():
+                worker.wait()
+
+    def accept(self):
+        self._wait_for_workers()
+        super().accept()
+
+    def reject(self):
+        self._wait_for_workers()
+        super().reject()
+
+    def closeEvent(self, event):
+        self._wait_for_workers()
+        super().closeEvent(event)
 
     # ── layout ────────────────────────────────────────────────────────────────
 
